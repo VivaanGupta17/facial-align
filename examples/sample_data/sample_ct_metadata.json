@@ -1,0 +1,55 @@
+{
+  "study_uid": "1.2.840.113619.2.55.3.604688.12345.20240115120000",
+  "patient_id_hash": "a3f8c2e1b4d6f9a0c5e2d8b1f4a7c3e6",
+  "modality": "CT",
+  "study_description": "MAXILLOFACIAL CT W/O CONTRAST",
+  "study_date": "2024-01-15",
+  "institution": "[DEIDENTIFIED]",
+  "manufacturer": "GE Medical Systems",
+  "model_name": "Revolution CT",
+  "series": [
+    {
+      "series_uid": "1.2.840.113619.2.55.3.604688.12345.20240115120001",
+      "series_number": 2,
+      "series_description": "Axial 0.625mm Bone",
+      "modality": "CT",
+      "num_instances": 512,
+      "slice_thickness_mm": 0.625,
+      "pixel_spacing_mm": [0.488, 0.488],
+      "reconstruction_kernel": "BONEPLUS",
+      "kvp": 120,
+      "exposure_mas": 250,
+      "image_dimensions": [512, 512],
+      "bits_allocated": 16,
+      "rescale_slope": 1.0,
+      "rescale_intercept": -1024.0,
+      "window_center": 400,
+      "window_width": 2000,
+      "body_part": "MAXILLOFACIAL",
+      "patient_position": "HFS",
+      "image_orientation": [1, 0, 0, 0, 1, 0],
+      "coverage_mm": 320.0
+    },
+    {
+      "series_uid": "1.2.840.113619.2.55.3.604688.12345.20240115120002",
+      "series_number": 3,
+      "series_description": "Axial 0.625mm Soft Tissue",
+      "modality": "CT",
+      "num_instances": 512,
+      "slice_thickness_mm": 0.625,
+      "pixel_spacing_mm": [0.488, 0.488],
+      "reconstruction_kernel": "STANDARD",
+      "kvp": 120,
+      "exposure_mas": 250,
+      "body_part": "MAXILLOFACIAL"
+    }
+  ],
+  "quality_assessment": {
+    "is_valid": true,
+    "has_bone_kernel": true,
+    "slice_thickness_acceptable": true,
+    "coverage_adequate": true,
+    "metal_artifact_detected": false,
+    "warnings": []
+  }
+}

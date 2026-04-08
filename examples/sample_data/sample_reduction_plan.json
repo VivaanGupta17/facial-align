@@ -1,0 +1,91 @@
+{
+  "plan_id": "plan-2024-00142-v1",
+  "case_id": "FA-2024-00142",
+  "plan_version": 1,
+  "model": "baseline_icp_reduction",
+  "model_version": "0.1.0",
+  "created_at": "2024-01-16T09:15:00Z",
+  "overall_confidence": 0.78,
+  "status": "pending_review",
+  "fragment_transforms": [
+    {
+      "fragment_id": "frag-001",
+      "fragment_name": "Left parasymphysis fragment",
+      "transform": {
+        "rotation_matrix": [
+          [0.9998, 0.0175, -0.0087],
+          [-0.0174, 0.9998, 0.0052],
+          [0.0088, -0.0050, 0.9999]
+        ],
+        "translation_mm": [1.2, -0.8, 0.3],
+        "rotation_euler_deg": {"x": 0.3, "y": -0.5, "z": 1.0}
+      },
+      "confidence": 0.82,
+      "method": "icp_to_symmetric_reference",
+      "residual_error_mm": 0.45
+    },
+    {
+      "fragment_id": "frag-002",
+      "fragment_name": "Right angle fragment",
+      "transform": {
+        "rotation_matrix": [
+          [0.9994, -0.0262, 0.0209],
+          [0.0265, 0.9996, -0.0105],
+          [-0.0206, 0.0110, 0.9997]
+        ],
+        "translation_mm": [-2.1, 1.5, -0.7],
+        "rotation_euler_deg": {"x": -0.6, "y": 1.2, "z": -1.5}
+      },
+      "confidence": 0.74,
+      "method": "icp_to_symmetric_reference",
+      "residual_error_mm": 0.82
+    }
+  ],
+  "dental_constraints": {
+    "enforced": true,
+    "pre_injury_occlusion": "angle_class_I",
+    "constraint_weight": 0.6,
+    "constraints_satisfied": {
+      "midline_alignment": true,
+      "molar_relationship": true,
+      "condylar_seating": false,
+      "occlusal_plane": true
+    }
+  },
+  "occlusal_metrics": {
+    "overjet_mm": 2.8,
+    "overjet_target_range_mm": [1.0, 4.0],
+    "overjet_within_normal": true,
+    "overbite_mm": 2.1,
+    "overbite_target_range_mm": [1.0, 4.0],
+    "overbite_within_normal": true,
+    "midline_deviation_mm": 0.4,
+    "midline_acceptable": true,
+    "molar_relationship": "class_I",
+    "occlusal_cant_deg": 1.2,
+    "cant_acceptable": true
+  },
+  "skeletal_metrics": {
+    "mandibular_symmetry_index": 0.94,
+    "left_right_ramus_height_diff_mm": 1.8,
+    "left_right_body_length_diff_mm": 0.9,
+    "gonial_angle_left_deg": 122.5,
+    "gonial_angle_right_deg": 124.1,
+    "condyle_position_left": {"x": -52.3, "y": 12.1, "z": 8.4},
+    "condyle_position_right": {"x": 51.8, "y": 11.9, "z": 8.1}
+  },
+  "validation": {
+    "all_constraints_met": false,
+    "warnings": [
+      {
+        "code": "CONDYLE_SEATING",
+        "severity": "medium",
+        "message": "Right condyle position deviates 1.8mm from estimated pre-injury position. Manual verification recommended.",
+        "fragment_id": "frag-002"
+      }
+    ],
+    "errors": []
+  },
+  "surgeon_edits": [],
+  "comparison_to_previous": null
+}

@@ -1,0 +1,98 @@
+{
+  "case_id": "FA-2024-00142",
+  "case_type": "TRAUMA",
+  "status": "SEGMENTED",
+  "created_at": "2024-01-15T14:30:00Z",
+  "updated_at": "2024-01-15T16:45:00Z",
+  "patient": {
+    "id_hash": "a3f8c2e1b4d6f9a0c5e2d8b1f4a7c3e6",
+    "age_at_study": 34,
+    "sex": "M"
+  },
+  "surgeon": {
+    "id": "surgeon-001",
+    "name": "[DEIDENTIFIED]",
+    "specialty": "Oral and Maxillofacial Surgery"
+  },
+  "study": {
+    "study_uid": "1.2.840.113619.2.55.3.604688.12345.20240115120000",
+    "modality": "CT",
+    "acquisition_date": "2024-01-15",
+    "primary_series": "Axial 0.625mm Bone",
+    "slice_count": 512,
+    "slice_thickness_mm": 0.625,
+    "voxel_spacing_mm": [0.488, 0.488, 0.625]
+  },
+  "clinical_info": {
+    "diagnosis": "Bilateral mandibular fracture — left parasymphysis, right angle",
+    "classification": {
+      "system": "AOCMF",
+      "level1": "Mandible",
+      "level2": "Parasymphysis (L), Angle (R)",
+      "level3": "Simple, non-comminuted"
+    },
+    "dentition_status": "Full adult dentition, mild crowding lower anterior",
+    "prior_occlusion": "Angle Class I",
+    "comorbidities": [],
+    "planned_procedure": "ORIF bilateral mandibular fractures"
+  },
+  "segmentation": {
+    "model": "totalsegmentator_v2",
+    "model_version": "2.5.0",
+    "task": "craniofacial_structures",
+    "inference_time_ms": 45200,
+    "device": "cuda:0",
+    "structures": {
+      "mandible": {"dice_confidence": 0.96, "volume_mm3": 42500, "mesh_path": "meshes/mandible.glb"},
+      "maxilla": {"dice_confidence": 0.94, "volume_mm3": 38200, "mesh_path": "meshes/maxilla.glb"},
+      "skull": {"dice_confidence": 0.97, "volume_mm3": 1245000, "mesh_path": "meshes/skull.glb"},
+      "teeth_upper": {"dice_confidence": 0.91, "volume_mm3": 8400, "mesh_path": "meshes/teeth_upper.glb"},
+      "teeth_lower": {"dice_confidence": 0.90, "volume_mm3": 7800, "mesh_path": "meshes/teeth_lower.glb"},
+      "zygomatic_arch_left": {"dice_confidence": 0.89, "volume_mm3": 3200, "mesh_path": "meshes/zygomatic_l.glb"},
+      "zygomatic_arch_right": {"dice_confidence": 0.88, "volume_mm3": 3150, "mesh_path": "meshes/zygomatic_r.glb"}
+    },
+    "overall_confidence": 0.92
+  },
+  "fragments": [
+    {
+      "id": "frag-001",
+      "name": "Left parasymphysis fragment",
+      "volume_mm3": 12300,
+      "centroid_mm": [-18.5, 42.3, -28.7],
+      "mesh_path": "meshes/fragment_001.glb",
+      "status": "identified",
+      "tooth_bearing": true,
+      "teeth_included": ["FDI-33", "FDI-34", "FDI-35"]
+    },
+    {
+      "id": "frag-002",
+      "name": "Right angle fragment",
+      "volume_mm3": 8700,
+      "centroid_mm": [35.2, 28.1, -22.4],
+      "mesh_path": "meshes/fragment_002.glb",
+      "status": "identified",
+      "tooth_bearing": false,
+      "condyle_bearing": true
+    },
+    {
+      "id": "frag-003",
+      "name": "Main mandibular body",
+      "volume_mm3": 21500,
+      "centroid_mm": [0.0, 38.5, -25.0],
+      "mesh_path": "meshes/fragment_003.glb",
+      "status": "reference",
+      "tooth_bearing": true,
+      "teeth_included": ["FDI-36", "FDI-37", "FDI-41", "FDI-42", "FDI-43", "FDI-44", "FDI-45", "FDI-46", "FDI-47"]
+    }
+  ],
+  "planning": null,
+  "review": null,
+  "timeline": [
+    {"timestamp": "2024-01-15T14:30:00Z", "event": "case_created", "actor": "system"},
+    {"timestamp": "2024-01-15T14:32:00Z", "event": "dicom_uploaded", "actor": "surgeon-001"},
+    {"timestamp": "2024-01-15T14:33:00Z", "event": "preprocessing_started", "actor": "system"},
+    {"timestamp": "2024-01-15T14:35:00Z", "event": "preprocessing_complete", "actor": "system"},
+    {"timestamp": "2024-01-15T14:35:30Z", "event": "segmentation_started", "actor": "system", "details": {"model": "totalsegmentator_v2"}},
+    {"timestamp": "2024-01-15T16:45:00Z", "event": "segmentation_complete", "actor": "system", "details": {"structures_found": 7, "confidence": 0.92}}
+  ]
+}
