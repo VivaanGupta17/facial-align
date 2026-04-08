@@ -1,0 +1,352 @@
+"""
+Fracture reduction pipeline: fragment geometry → ML prediction → constraint optimization → plan.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+import numpy as np
+
+from app.core.config import get_settings
+from app.core.logging import TimedOperation, get_logger
+from app.services.reduction.reduction_service import (
+    FragmentMesh,
+    FractureReductionService,
+    OcclusalConstraintEngine,
+)
+
+settings = get_settings()
+logger = get_logger(__name__)
+
+
+class FractureReductionPipeline:
+    """
+    End-to-end fracture reduction planning pipeline.
+
+    Stages:
+    5%  - Load segmentation data and fragment meshes
+    20% - Load or generate intact reference anatomy
+    30% - Load dental arch meshes (if available)
+    40% - Run reduction model (ML or ICP baseline)
+    65% - Apply occlusal + skeletal constraints
+    75% - Compute occlusal metrics
+    80% - Validate plan
+    90% - Save plan to database
+    100% - Complete
+    """
+
+    def __init__(
+        self,
+        plan_id: str,
+        case_id: str,
+        segmentation_id: str,
+        model_name: str = "baseline_icp",
+        dental_constraints: Optional[Dict[str, Any]] = None,
+        use_intact_reference: bool = True,
+        user_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> None:
+        self._plan_id = plan_id
+        self._case_id = case_id
+        self._seg_id = segmentation_id
+        self._model_name = model_name
+        self._dental_constraints_dict = dental_constraints
+        self._use_intact_reference = use_intact_reference
+        self._user_id = user_id
+        self._progress = progress_callback or (lambda pct, step: None)
+
+    async def run(self) -> Dict[str, Any]:
+        """Execute the fracture reduction planning pipeline."""
+        from app.schemas.plan import OcclusalConstraints
+
+        logger.info(
+            "reduction_pipeline_started",
+            plan_id=self._plan_id,
+            model=self._model_name,
+        )
+
+        with TimedOperation(logger, "reduction_pipeline", plan_id=self._plan_id):
+            start = datetime.now(timezone.utc)
+
+            # ── Load fragment meshes ──
+            self._progress(5, "Loading fragment geometry from segmentation")
+            fragments = await self._load_fragments()
+
+            if not fragments:
+                raise ValueError(
+                    f"No fracture fragments found in segmentation {self._seg_id}"
+                )
+
+            logger.info("fragments_loaded", n_fragments=len(fragments))
+
+            # ── Load intact reference ──
+            self._progress(20, "Loading intact reference anatomy")
+            intact_reference = None
+            if self._use_intact_reference:
+                intact_reference = await self._load_or_generate_reference(fragments)
+
+            # ── Load dental arches ──
+            self._progress(30, "Loading dental arch meshes")
+            upper_arch, lower_arch = await self._load_dental_arches()
+
+            # ── Parse constraints ──
+            dental_constraints = None
+            if self._dental_constraints_dict:
+                try:
+                    dental_constraints = OcclusalConstraints(**self._dental_constraints_dict)
+                except Exception as exc:
+                    logger.warning("invalid_dental_constraints", error=str(exc))
+
+            # ── Run reduction ──
+            self._progress(40, f"Running {self._model_name} reduction model")
+            service = FractureReductionService()
+            plan = await service.suggest_reduction(
+                fragments=fragments,
+                intact_reference=intact_reference,
+                dental_constraints=dental_constraints,
+                model_name=self._model_name,
+                upper_arch=upper_arch,
+                lower_arch=lower_arch,
+            )
+
+            # ── Save to database ──
+            self._progress(90, "Saving reduction plan")
+            end = datetime.now(timezone.utc)
+            duration_ms = int((end - start).total_seconds() * 1000)
+            await self._save_plan(plan, duration_ms)
+
+            self._progress(100, "Reduction planning complete")
+
+            logger.info(
+                "reduction_pipeline_complete",
+                plan_id=self._plan_id,
+                confidence=round(plan.overall_confidence, 3),
+                symmetry=round(plan.symmetry_score, 3),
+                validated=plan.validation.passed if plan.validation else None,
+            )
+
+            return {
+                "plan_id": self._plan_id,
+                "status": "complete",
+                "n_fragments": len(fragments),
+                "overall_confidence": plan.overall_confidence,
+                "symmetry_score": plan.symmetry_score,
+                "validation_passed": plan.validation.passed if plan.validation else None,
+                "generation_time_ms": plan.generation_time_ms,
+            }
+
+    async def _load_fragments(self) -> List[FragmentMesh]:
+        """Load fracture fragment meshes from the segmentation result."""
+        from app.db.database import get_db_context
+        from app.models.segmentation import SegmentationResult
+        from sqlalchemy import select
+
+        async with get_db_context() as db:
+            seg = (
+                await db.execute(
+                    select(SegmentationResult).where(SegmentationResult.id == self._seg_id)
+                )
+            ).scalar_one_or_none()
+
+        if not seg:
+            raise ValueError(f"Segmentation {self._seg_id} not found")
+
+        fragments: List[FragmentMesh] = []
+        mesh_paths: Dict[str, Any] = seg.mesh_storage_paths or {}
+        labels: Dict[str, int] = seg.structure_labels or {}
+        volume_stats: Dict[str, Any] = seg.volume_stats or {}
+
+        for structure_name, label_val in labels.items():
+            struct_paths = mesh_paths.get(structure_name, {})
+            ply_path = struct_paths.get("ply") if isinstance(struct_paths, dict) else None
+
+            # Load mesh as point cloud
+            points = await self._load_mesh_points(ply_path)
+            if points is None or len(points) < 10:
+                logger.warning("skipping_empty_structure", structure=structure_name)
+                continue
+
+            stats = volume_stats.get(structure_name, {})
+            centroid = np.array([
+                stats.get("centroid_x_mm", 0.0),
+                stats.get("centroid_y_mm", 0.0),
+                stats.get("centroid_z_mm", 0.0),
+            ])
+            volume_mm3 = stats.get("volume_mm3", 0.0)
+
+            # Determine if this is a reference fragment (largest single structure)
+            is_reference = structure_name in ["skull_base", "frontal_bone"]
+
+            fragments.append(FragmentMesh(
+                fragment_id=structure_name,
+                label_value=label_val,
+                points=points,
+                centroid_mm=centroid,
+                volume_mm3=volume_mm3,
+                parent_structure=structure_name,
+                is_reference=is_reference,
+            ))
+
+        # Sort by volume (largest first as reference)
+        fragments.sort(key=lambda f: f.volume_mm3, reverse=True)
+        if fragments and not any(f.is_reference for f in fragments):
+            fragments[0].is_reference = True
+
+        return fragments
+
+    async def _load_mesh_points(self, path: Optional[str]) -> Optional[np.ndarray]:
+        """Load vertex points from a mesh file."""
+        if not path or not Path(path).exists():
+            return None
+        try:
+            import trimesh
+            mesh = trimesh.load(path)
+            if isinstance(mesh, trimesh.Trimesh):
+                return np.asarray(mesh.vertices)
+        except Exception as exc:
+            logger.warning("mesh_load_failed", path=path, error=str(exc))
+        return None
+
+    async def _load_or_generate_reference(
+        self, fragments: List[FragmentMesh]
+    ) -> Optional[Any]:
+        """
+        Load or generate the intact reference anatomy.
+
+        Strategy:
+        1. Check if pre-injury CT is available (stored in case)
+        2. Mirror the intact contralateral side (for unilateral fractures)
+        3. Use statistical atlas (TODO: implement atlas)
+        4. Fall back to None (ICP uses centroid-based alignment)
+        """
+        logger.info(
+            "generating_reference_anatomy",
+            strategy="contralateral_mirror",
+        )
+
+        # Strategy: Mirror the reference fragment to create a synthetic intact side
+        ref_fragments = [f for f in fragments if f.is_reference]
+        if not ref_fragments:
+            return None
+
+        try:
+            # Create mirrored reference using the non-fractured (reference) fragments
+            import trimesh
+            all_points = np.vstack([f.points for f in ref_fragments])
+
+            # Create mirror about the sagittal plane (x=0)
+            mirrored_points = all_points.copy()
+            mirrored_points[:, 0] *= -1  # Mirror x-axis
+
+            # Combine original + mirrored for complete reference
+            combined = np.vstack([all_points, mirrored_points])
+
+            # Create a mesh from point cloud (convex hull as rough reference)
+            pcd = trimesh.PointCloud(combined)
+            return pcd
+
+        except Exception as exc:
+            logger.warning("reference_generation_failed", error=str(exc))
+            return None
+
+    async def _load_dental_arches(self):
+        """Load dental arch meshes for occlusal constraint evaluation."""
+        from app.db.database import get_db_context
+        from app.models.segmentation import SegmentationResult
+        from sqlalchemy import select
+
+        try:
+            async with get_db_context() as db:
+                seg = (
+                    await db.execute(
+                        select(SegmentationResult).where(SegmentationResult.id == self._seg_id)
+                    )
+                ).scalar_one_or_none()
+
+            if not seg or not seg.dental_mesh_paths:
+                return None, None
+
+            import trimesh
+            # Load upper arch (aggregate of upper teeth)
+            upper_arch = None
+            lower_arch = None
+
+            dental_paths = seg.dental_mesh_paths or {}
+            upper_meshes = []
+            lower_meshes = []
+
+            for fdi_str, paths in dental_paths.items():
+                fdi = int(fdi_str)
+                glb_path = paths.get("glb") if isinstance(paths, dict) else None
+                if glb_path and Path(glb_path).exists():
+                    try:
+                        mesh = trimesh.load(glb_path)
+                        if 11 <= fdi <= 28:
+                            upper_meshes.append(mesh)
+                        elif 31 <= fdi <= 48:
+                            lower_meshes.append(mesh)
+                    except Exception:
+                        pass
+
+            if upper_meshes:
+                upper_arch = trimesh.util.concatenate(upper_meshes)
+            if lower_meshes:
+                lower_arch = trimesh.util.concatenate(lower_meshes)
+
+            return upper_arch, lower_arch
+
+        except Exception as exc:
+            logger.warning("dental_arch_load_failed", error=str(exc))
+            return None, None
+
+    async def _save_plan(self, plan, generation_time_ms: int) -> None:
+        """Save the reduction plan to the database."""
+        from app.db.database import get_db_context
+        from app.models.plan import ReductionPlan
+        from sqlalchemy import update
+
+        # Convert numpy transforms to lists for JSON storage
+        transformations = {}
+        for frag_id, transform_4x4 in plan.fragment_transforms.items():
+            R = transform_4x4[:3, :3].tolist()
+            t = transform_4x4[:3, 3].tolist()
+            transformations[frag_id] = {
+                "transform": {
+                    "rotation_matrix": R,
+                    "translation_mm": t,
+                },
+                "fragment_label": 0,
+                "confidence": plan.fragment_confidences.get(frag_id, 0.0),
+            }
+
+        occlusal_metrics_dict = None
+        if plan.occlusal_metrics:
+            occlusal_metrics_dict = plan.occlusal_metrics.model_dump(exclude_none=True)
+
+        symmetry_metrics = {
+            "symmetry_score": plan.symmetry_score,
+        }
+
+        validation_warnings = []
+        if plan.validation:
+            validation_warnings = plan.validation.warnings
+
+        async with get_db_context() as db:
+            await db.execute(
+                update(ReductionPlan)
+                .where(ReductionPlan.id == self._plan_id)
+                .values(
+                    model_version=plan.model_version,
+                    transformations=transformations,
+                    occlusal_metrics=occlusal_metrics_dict,
+                    symmetry_metrics=symmetry_metrics,
+                    confidence_score=plan.overall_confidence,
+                    validation_passed=plan.validation.passed if plan.validation else None,
+                    validation_warnings=validation_warnings,
+                    generation_time_ms=generation_time_ms,
+                    status="validated" if (plan.validation and plan.validation.passed) else "draft",
+                )
+            )
