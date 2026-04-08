@@ -1,0 +1,200 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "facialign-backend"
+version = "0.1.0"
+description = "Facial Align — AI-native craniofacial surgical planning platform backend"
+readme = "README.md"
+license = { text = "Proprietary" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Facial Align Engineering", email = "engineering@facialign.ai" },
+]
+
+dependencies = [
+    # ── Web framework ─────────────────────────────────────────────────────────
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "python-multipart>=0.0.9",     # multipart form uploads
+    "httpx>=0.27.0",               # async HTTP client (for health checks, tests)
+    "starlette>=0.37.0",
+
+    # ── Database ──────────────────────────────────────────────────────────────
+    "sqlalchemy[asyncio]>=2.0.29",
+    "asyncpg>=0.29.0",             # async PostgreSQL driver
+    "psycopg2-binary>=2.9.9",      # sync driver for Alembic
+    "alembic>=1.13.1",
+
+    # ── Pydantic & Settings ───────────────────────────────────────────────────
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.1",
+
+    # ── Task queue ────────────────────────────────────────────────────────────
+    "celery[redis]>=5.3.6",
+    "redis>=5.0.4",
+    "kombu>=5.3.5",
+
+    # ── Authentication & Security ─────────────────────────────────────────────
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "cryptography>=42.0.5",
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    "structlog>=24.1.0",
+
+    # ── DICOM processing ──────────────────────────────────────────────────────
+    "pydicom>=2.4.4",
+    "highdicom>=0.22.0",           # structured DICOM (SEG, SR)
+    "SimpleITK>=2.3.1",            # volume reconstruction + resampling
+    "nibabel>=5.2.1",              # NIfTI I/O
+
+    # ── Numerical / image processing ──────────────────────────────────────────
+    "numpy>=1.26.4",
+    "scipy>=1.13.0",
+    "scikit-image>=0.23.2",        # marching cubes, morphology
+
+    # ── Mesh processing ───────────────────────────────────────────────────────
+    "trimesh>=4.3.2",              # mesh I/O, smoothing, simplification
+    "open3d>=0.18.0",              # ICP, point cloud processing
+    "pyvista>=0.43.9",             # 3D visualization + mesh ops
+
+    # ── ML / deep learning ────────────────────────────────────────────────────
+    "torch>=2.3.0",                # PyTorch for model inference
+    "torchvision>=0.18.0",
+    "monai>=1.3.0",                # Medical image AI framework
+    "onnxruntime-gpu>=1.18.0",     # ONNX runtime for model deployment
+
+    # ── Segmentation models ───────────────────────────────────────────────────
+    "totalsegmentator>=2.2.1",     # TotalSegmentator multi-organ segmentation
+    "nnunetv2>=2.4.1",             # nnUNet training/inference framework
+
+    # ── File utilities ────────────────────────────────────────────────────────
+    "python-magic>=0.4.27",        # MIME type detection
+    "pillow>=10.3.0",              # image conversion (slice exports)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.6",
+    "pytest-cov>=5.0.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.27.0",
+    "black>=24.4.2",
+    "ruff>=0.4.4",
+    "mypy>=1.10.0",
+    "pre-commit>=3.7.1",
+    "ipython>=8.24.0",
+]
+
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.24",
+    "mkdocstrings[python]>=0.25.1",
+]
+
+[project.scripts]
+facialign-server = "app.main:app"
+facialign-worker = "app.workers.celery_app:celery_app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ── pytest configuration ──────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+    "--cov=app",
+    "--cov=pipelines",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests requiring GPU hardware",
+    "integration: marks integration tests requiring real services",
+    "clinical: marks tests validating clinical correctness",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning:torch",
+]
+
+# ── ruff linting ──────────────────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in default arguments
+    "B904",  # raise from none (okay for domain exceptions)
+    "N806",  # variable in function should be lowercase
+    "SIM108", # ternary operator (sometimes less readable)
+]
+exclude = ["alembic/", "*.pyi", "__pycache__"]
+
+[tool.ruff.isort]
+known-first-party = ["app", "pipelines", "data_contracts"]
+
+# ── mypy type checking ────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = ["alembic/", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["pydicom.*", "SimpleITK.*", "trimesh.*", "open3d.*", "monai.*", "totalsegmentator.*"]
+ignore_missing_imports = true
+
+# ── black formatter ───────────────────────────────────────────────────────────
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = "\\.pyi?$"
+extend-exclude = "/alembic/"
+
+# ── coverage ──────────────────────────────────────────────────────────────────
+
+[tool.coverage.run]
+source = ["app", "pipelines"]
+omit = ["*/tests/*", "*/migrations/*", "alembic/*", "*/conftest.py"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 60  # Minimum 60% coverage required
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abc.abstractmethod",
+]
