@@ -1,0 +1,42 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=10240"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks:
+      - id: ruff
+        args: [--fix]
+        types_or: [python, pyi, jupyter]
+      - id: ruff-format
+        types_or: [python, pyi, jupyter]
+
+  # Prevent PHI from being committed
+  - repo: local
+    hooks:
+      - id: no-dicom-files
+        name: Prevent DICOM file commits
+        entry: "Cannot commit DICOM files — may contain PHI"
+        language: fail
+        files: \.(dcm|ima)$
+      - id: no-nifti-files
+        name: Prevent NIfTI file commits
+        entry: "Cannot commit NIfTI files — may contain patient data"
+        language: fail
+        files: \.(nii|nii\.gz|nrrd)$
+      - id: no-stl-files
+        name: Prevent STL file commits
+        entry: "Cannot commit mesh files — may be derived from patient data"
+        language: fail
+        files: \.(stl|ply|obj)$
