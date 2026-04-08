@@ -1,0 +1,418 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =============================================================================
+   CSS Custom Properties — Medical Platform Design System
+   ============================================================================= */
+
+:root {
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-2: #233044;
+  --color-surface-3: #2a3a52;
+  --color-border: #334155;
+  --color-border-subtle: #1e293b;
+  --color-text: #f8fafc;
+  --color-text-muted: #94a3b8;
+  --color-text-dim: #64748b;
+  --color-accent: #06b6d4;
+  --color-accent-bright: #22d3ee;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+
+  --sidebar-width: 240px;
+  --topbar-height: 52px;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  --transition-fast: 100ms ease-out;
+  --transition-base: 200ms ease-out;
+  --transition-slow: 350ms ease-out;
+}
+
+/* =============================================================================
+   Base Resets & Global Styles
+   ============================================================================= */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  line-height: 1.375rem;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* =============================================================================
+   Scrollbar Styling
+   ============================================================================= */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+/* =============================================================================
+   Typography
+   ============================================================================= */
+
+.font-mono, code, pre, .metric-value, .coordinate {
+  font-family: var(--font-mono);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* =============================================================================
+   Component Layer
+   ============================================================================= */
+
+@layer components {
+  /* Surface cards */
+  .card {
+    @apply bg-slate-800 border border-slate-700 rounded-lg;
+  }
+
+  .card-sm {
+    @apply bg-slate-800 border border-slate-700 rounded-md;
+  }
+
+  .surface-elevated {
+    @apply bg-slate-750 border border-slate-700;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  }
+
+  /* Interactive elements */
+  .btn-primary {
+    @apply bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-semibold px-4 py-2 rounded-md transition-colors duration-150 text-sm;
+  }
+
+  .btn-secondary {
+    @apply bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium px-4 py-2 rounded-md transition-colors duration-150 text-sm border border-slate-600;
+  }
+
+  .btn-ghost {
+    @apply hover:bg-slate-700 text-slate-300 font-medium px-3 py-1.5 rounded-md transition-colors duration-150 text-sm;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white font-semibold px-4 py-2 rounded-md transition-colors duration-150 text-sm;
+  }
+
+  .btn-success {
+    @apply bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2 rounded-md transition-colors duration-150 text-sm;
+  }
+
+  .btn-icon {
+    @apply p-2 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-100 transition-colors duration-150;
+  }
+
+  /* Form elements */
+  .input-base {
+    @apply bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-slate-100 text-sm placeholder-slate-500
+           focus:outline-none focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 transition-colors duration-150 w-full;
+  }
+
+  .select-base {
+    @apply bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-slate-100 text-sm
+           focus:outline-none focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 transition-colors duration-150 w-full;
+  }
+
+  /* Labels */
+  .label-xs {
+    @apply text-2xs font-semibold uppercase tracking-wider text-slate-500;
+  }
+
+  .label-sm {
+    @apply text-xs font-medium text-slate-400;
+  }
+
+  /* Metric display */
+  .metric-display {
+    @apply font-mono text-slate-100;
+  }
+
+  .metric-unit {
+    @apply text-slate-500 text-xs font-mono;
+  }
+
+  /* AI-branded elements */
+  .ai-badge {
+    @apply inline-flex items-center gap-1 bg-cyan-950 border border-cyan-800 text-cyan-400 text-xs font-semibold px-2 py-0.5 rounded;
+  }
+
+  .ai-glow {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);
+  }
+
+  .ai-border {
+    @apply border border-cyan-800;
+  }
+
+  /* Navigation */
+  .nav-item {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium text-slate-400
+           hover:text-slate-100 hover:bg-slate-700 transition-colors duration-150 cursor-pointer;
+  }
+
+  .nav-item-active {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium text-cyan-400
+           bg-cyan-950 border border-cyan-900;
+  }
+
+  /* Dividers */
+  .divider {
+    @apply border-t border-slate-700;
+  }
+
+  /* Confidence bar */
+  .confidence-bar-track {
+    @apply h-1.5 rounded-full bg-slate-700 overflow-hidden;
+  }
+
+  /* Panel header */
+  .panel-header {
+    @apply flex items-center justify-between px-4 py-3 border-b border-slate-700;
+  }
+
+  .panel-title {
+    @apply text-sm font-semibold text-slate-200;
+  }
+
+  /* Status indicators */
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+
+  /* Medical value display */
+  .measurement-value {
+    @apply font-mono text-base font-semibold text-slate-100;
+  }
+
+  .measurement-label {
+    @apply text-xs text-slate-400 font-medium;
+  }
+
+  /* Table */
+  .data-table {
+    @apply w-full text-sm;
+  }
+
+  .data-table th {
+    @apply text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700 bg-slate-900/50;
+  }
+
+  .data-table td {
+    @apply px-4 py-3 border-b border-slate-800;
+  }
+
+  .data-table tr:hover td {
+    @apply bg-slate-800/60;
+  }
+}
+
+/* =============================================================================
+   Utility Layer Additions
+   ============================================================================= */
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .bg-grid {
+    background-image: radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .clip-inset {
+    clip-path: inset(0 round 8px);
+  }
+
+  .glow-cyan {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.3);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.25);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.25);
+  }
+
+  .text-gradient-cyan {
+    background: linear-gradient(135deg, #06b6d4, #22d3ee);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Scan line animation for AI processing */
+  .scan-line {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .scan-line::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.1), transparent);
+    animation: scanLine 2s ease-in-out infinite;
+  }
+
+  @keyframes scanLine {
+    0% { left: -100%; }
+    100% { left: 100%; }
+  }
+
+  /* Pulse glow for AI indicators */
+  .pulse-cyan {
+    animation: pulseCyan 2s ease-in-out infinite;
+  }
+
+  @keyframes pulseCyan {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(6, 182, 212, 0); }
+  }
+}
+
+/* =============================================================================
+   Three.js Canvas
+   ============================================================================= */
+
+canvas.three-canvas {
+  display: block;
+  outline: none;
+}
+
+/* =============================================================================
+   React Range Slider Overrides
+   ============================================================================= */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: #334155;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #06b6d4;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: #22d3ee;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: #06b6d4;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+}
+
+/* =============================================================================
+   Animations
+   ============================================================================= */
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.25s ease-out;
+}
+
+.animate-slide-in-up {
+  animation: slideInUp 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slideInUp {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* =============================================================================
+   Print Styles (for surgical reports)
+   ============================================================================= */
+
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+
+  .sidebar, .topbar, .no-print {
+    display: none !important;
+  }
+}
