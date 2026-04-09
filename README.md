@@ -4,6 +4,8 @@
 
 Facial Align is an open research platform for virtual surgical planning (VSP) in cranio-maxillofacial (CMF) surgery. It replaces the "engineer-drives-the-software, surgeon-approves" service model with an AI system that proposes plans autonomously, surfaces uncertainty explicitly, and keeps the surgeon in the decision loop. The AI is not a button — it is the planning engine.
 
+> **51,000+ lines of source code** across 216 files — Python backend, TypeScript frontend, ML pipelines, and comprehensive documentation.
+
 ---
 
 ## Mission
@@ -15,153 +17,163 @@ Current VSP workflows require scheduling a live session with a third-party biome
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         FACIAL ALIGN                                │
-│                                                                     │
-│   ┌──────────────┐      ┌───────────────────────────────────────┐  │
-│   │   Frontend   │      │              Backend API              │  │
-│   │  React/TS    │◄────►│           FastAPI (Python)            │  │
-│   │  Three.js    │      │        /api/v1/* endpoints            │  │
-│   │  OHIF Viewer │      └────────────┬──────────────────────────┘  │
-│   └──────────────┘                  │                              │
-│                                     │ enqueue jobs                 │
-│                              ┌──────▼──────┐                       │
-│                              │    Redis    │                       │
-│                              │   Broker    │                       │
-│                              └──────┬──────┘                       │
-│                                     │                              │
-│              ┌──────────────────────┼─────────────────────┐        │
-│              │                      │                     │        │
-│     ┌────────▼──────┐    ┌──────────▼──────┐   ┌─────────▼─────┐  │
-│     │   Celery      │    │   Celery        │   │  Celery       │  │
-│     │   Worker:     │    │   Worker:       │   │  Worker:      │  │
-│     │   Ingestion   │    │   Segmentation  │   │  Planning     │  │
-│     │   + Preproc   │    │   + Mesh        │   │  + Occlusion  │  │
-│     └────────┬──────┘    └──────────┬──────┘   └─────────┬─────┘  │
-│              │                      │                     │        │
-│              └──────────────────────┼─────────────────────┘        │
-│                                     │                              │
-│                    ┌────────────────┼──────────────────┐           │
-│                    │                │                  │           │
-│           ┌────────▼────┐  ┌────────▼────┐  ┌─────────▼────────┐  │
-│           │  PostgreSQL │  │   MinIO/S3  │  │  Inference       │  │
-│           │  Metadata   │  │  DICOM/NIfTI│  │  Service         │  │
-│           │  + Audit    │  │  /STL/Models│  │  TorchServe GPU  │  │
-│           └─────────────┘  └─────────────┘  └──────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           FACIAL ALIGN                                   │
+│                                                                          │
+│   ┌──────────────┐      ┌────────────────────────────────────────────┐  │
+│   │   Frontend   │      │              Backend API                   │  │
+│   │  React + TS  │◄────►│           FastAPI (Python)                 │  │
+│   │  R3F Viewer  │  WS  │        /api/v1/* endpoints                 │  │
+│   │  Ceph Overlay│◄────►│  Middleware: Audit │ RateLimit │ Tracing   │  │
+│   └──────────────┘      └──────────────┬─────────────────────────────┘  │
+│                                        │ enqueue jobs                    │
+│                                 ┌──────▼──────┐                         │
+│                                 │    Redis    │                         │
+│                                 │  Broker +   │                         │
+│                                 │  Pub/Sub    │                         │
+│                                 └──────┬──────┘                         │
+│                                        │                                │
+│              ┌─────────────────────────┼──────────────────────┐         │
+│              │                         │                      │         │
+│     ┌────────▼──────┐    ┌─────────────▼────┐   ┌────────────▼──────┐  │
+│     │   Celery      │    │   Celery         │   │  Celery           │  │
+│     │   Worker:     │    │   Worker:        │   │  Worker:          │  │
+│     │   Ingestion   │    │   Segmentation   │   │  Planning         │  │
+│     │   + DeID      │    │   + Mesh + QC    │   │  + Occlusion      │  │
+│     │   + QC        │    │   + Ceph         │   │  + Evaluation     │  │
+│     └────────┬──────┘    └─────────────┬────┘   └────────────┬──────┘  │
+│              │                         │                      │         │
+│              └─────────────────────────┼──────────────────────┘         │
+│                                        │                                │
+│                    ┌───────────────────┼───────────────────┐            │
+│                    │                   │                   │            │
+│           ┌────────▼────┐   ┌──────────▼───┐   ┌──────────▼─────────┐  │
+│           │  PostgreSQL │   │  MinIO/S3    │   │  Model Registry    │  │
+│           │  + Alembic  │   │  DICOM/NIfTI │   │  TotalSegmentator  │  │
+│           │  + Audit    │   │  /GLB/Models │   │  nnU-Net / Custom  │  │
+│           └─────────────┘   └──────────────┘   └────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Key Features
+## What Works Today
 
-### Functional (Phase 1 Baseline)
-- **DICOM ingestion pipeline** — accepts CT/CBCT series; handles variable slice thickness, photometric inversion, series fragmentation, and HU calibration
-- **De-identification** — pydicom/deid + pixel-level PHI detection before any data persists
-- **Multi-structure segmentation** — TotalSegmentator + DentalSegmentator covering skull, mandible, maxilla, individual teeth (FDI notation), sinuses, and soft tissue envelope
-- **Mesh extraction** — marching cubes → PyVista/trimesh post-processing → per-structure STL/OBJ export
-- **Cephalometric landmark detection** — 24–32 CMF landmarks with per-landmark confidence scores
-- **Fracture fragment identification** — connected component analysis on bone HU regions
-- **Occlusal constraint engine** — encodes intercuspal position and Angle classification as computational constraints (not just a visual overlay)
-- **3D viewer** — OHIF v3 + Cornerstone3D for zero-footprint DICOM review; Three.js for planning visualization
-- **Async job processing** — Celery + Redis; all pipeline stages non-blocking with status polling
-- **Evaluation framework** — Dice, Hausdorff distance, surface-to-surface distance; landmark error (mm)
-
-### Scaffolded (Architecture in Place, Not Fully Implemented)
-- Rule-based surgical plan suggestion (Le Fort I, BSSO, genioplasty movement vectors)
-- Symmetry-guided fracture reduction with confidence bands
-- PDF surgical planning report export
-- Postoperative comparison overlay (plan vs. post-op CT)
-- Model versioning and A/B evaluation
-
-### Planned (Phase 2–3)
-- Learned plan suggestion from clinical case library
-- Soft tissue simulation (aesthetic outcome preview)
-- Automated occlusal splint design + export for 3D printing
-- Intraoperative navigation export (modified DICOM for Stryker/Medtronic)
-- AR/VR planning interface
-- PACS integration and multi-site deployment
+| Capability | Implementation | Lines |
+|-----------|---------------|-------|
+| **DICOM pipeline** | Upload → parse → de-identify (PS3.15, 71 PHI tags, HMAC pseudonymization) → quality control (8 checks, A/B/C/F grading) → volume reconstruction | ~2,000 |
+| **CT quality control** | Slice thickness, gap detection, spacing consistency, FOV, motion artifacts (inter-slice variance), bone contrast (HU histogram), calibration | 1,021 |
+| **Segmentation** | TotalSegmentator adapter with structure mapping + confidence; nnU-Net and dental adapters ready for weights | ~1,800 |
+| **Cephalometric analysis** | 24 anatomical landmarks detected from masks via anatomical heuristics; SNA/SNB/ANB angles; full CephalometricAnalysis dataclass | 903 |
+| **Facial symmetry** | Midsagittal plane detection (PCA + iterative refinement); per-structure asymmetry maps via EDT; clinical grading | 828 |
+| **Fracture reduction** | ICP baseline with Open3D; bilateral symmetry enforcement; learned model interface (PointNet++ / SE(3) architecture) | ~1,200 |
+| **Occlusion engine** | Geometric occlusal model; constraint satisfaction; molar classification (Class I/II/III); splint design spec generation | ~600 |
+| **Plan evaluation** | Per-fragment alignment metrics, symmetry scoring, occlusion assessment, condylar assessment, AO CMF hardware recommendations, composite grading | 873 |
+| **Surgical sequencing** | Graph-based optimal reduction order using clinical priority, anatomical templates, fragment-specific instructions | 498 |
+| **Clinical reporting** | Structured Markdown surgical planning reports with all sections | 391 |
+| **Mesh pipeline** | Marching cubes + Gaussian smoothing, quality-preserving decimation, multi-resolution LODs, PBR material assignment, 24-color anatomical map, watertightness/manifold checks, repair pipeline | ~1,600 |
+| **3D viewer** | React Three Fiber with fragment manipulation, distance/angle measurement tools, cross-section viewer (axial/coronal/sagittal), window/level presets | ~2,500 |
+| **Cephalometric overlay** | SVG lateral skull, 17 landmarks, 11 measurements, color-coded normal/borderline/abnormal | 540 |
+| **Case dashboard** | Case list with filters, detailed case view, upload page, surgeon review workspace | ~1,400 |
+| **API** | FastAPI with 7 endpoint groups (cases, DICOM, segmentation, planning, viewer, jobs, health), WebSocket real-time updates | ~2,200 |
+| **Middleware** | HIPAA audit logging, token bucket rate limiting (Redis), request tracing, global error handling | 1,871 |
+| **CLI** | Case management, model ops, pipeline execution, admin tools — 7 command groups, 33 commands | ~4,800 |
+| **SDK** | Typed async Python client with retry, job polling, typed response objects | 612 |
+| **Data contracts** | 9 Pydantic v2 schemas with clinical validation, computed properties, cross-field checks | ~3,500 |
+| **Tests** | 331 test functions across 22 files; comprehensive fixtures (DICOM, mesh, plan, case) | ~7,700 |
+| **Documentation** | Architecture, PRD, clinical workflows, regulatory, evaluation plan, 5 research documents | ~11,000 |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Version | Notes |
-|-------|-----------|---------|-------|
-| **ML Framework** | PyTorch | 2.11 | GPU inference backbone |
-| **Medical Imaging ML** | MONAI | 1.5.2 | Transforms, loaders, losses, model zoo |
-| **Segmentation Engine** | nnU-Net v2 | Latest | Self-configuring; CMF fine-tuning target |
-| **Pre-trained Segmentation** | TotalSegmentator | 2.11 | Skull, mandible, sinuses; runs out of box |
-| **Dental Segmentation** | DentalSegmentator | Latest | nnU-Net-based; mandible canal, teeth |
-| **DICOM I/O** | pydicom | 2.4.5 | Metadata parsing and DICOM write |
-| **Volume Processing** | SimpleITK | 2.5.3 | Series assembly, resampling, registration |
-| **NIfTI I/O** | nibabel | 5.4.1 | NIfTI pipeline I/O |
-| **DICOM Output** | highdicom | 0.26.1 | DICOM-SEG, SR, RT-Struct |
-| **3D Mesh** | VTK / PyVista | Latest | Volume rendering, STL export, mesh ops |
-| **Mesh Ops** | trimesh | 4.11.5 | Boolean ops, 3D-print prep, STL/OBJ/3MF |
-| **Image Utils** | scikit-image | 0.26.0 | Marching cubes, morphology |
-| **API** | FastAPI | 0.135.3 | Async REST; OpenAPI docs auto-generated |
-| **Task Queue** | Celery + Redis | 5.x | Long-running pipeline jobs |
-| **Database** | PostgreSQL | 16 | Patient/case metadata, audit log |
-| **Object Storage** | MinIO | Latest | S3-compatible; DICOM/NIfTI/STL storage |
-| **DICOM Viewer** | OHIF v3 + Cornerstone3D | 3.12.0 | Zero-footprint browser viewer |
-| **Frontend** | React + TypeScript | 18 / 5 | Vite build; Zustand state management |
-| **3D Visualization** | Three.js + React Three Fiber | Latest | Planning scene renderer |
-| **Model Serving** | TorchServe | 0.12 | GPU inference service |
-| **Containerization** | Docker + docker-compose | Latest | Reproducible dev and prod |
-| **Experiment Tracking** | MLflow | Latest | Model registry, run comparison |
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| **Segmentation** | TotalSegmentator v2 | Apache-2.0, covers 80%+ CMF anatomy out of box |
+| **3D Viewer** | React Three Fiber | Mesh manipulation (not just DICOM viewing — why not OHIF) |
+| **Backend** | FastAPI + Celery | Async ML inference, structured endpoints, OpenAPI |
+| **Database** | PostgreSQL + Alembic | Relational case tracking, migration management |
+| **Object Store** | MinIO (S3-compatible) | DICOM, NIfTI, GLB, model weights |
+| **Frontend** | React 18 + TypeScript + Zustand | Type-safe, fast state management |
+| **Mesh** | trimesh + scikit-image | Marching cubes, mesh ops, GLB/STL export |
+| **Registration** | Open3D + scipy | ICP, FPFH, KD-tree nearest neighbor |
+| **Containers** | Docker Compose | Full stack dev: backend, frontend, PostgreSQL, Redis, MinIO, Celery |
+| **CI/CD** | GitHub Actions | Lint, type-check, test on every push |
 
 ---
 
-## Quick Start (Docker)
+## Quick Start
 
-### Prerequisites
-- Docker ≥ 24.0 and Docker Compose v2
-- NVIDIA GPU with ≥ 16 GB VRAM (for GPU inference; CPU fallback available, slow)
-- NVIDIA Container Toolkit installed
-- 40 GB free disk space
-
-### Start the full stack
+### Docker (recommended)
 
 ```bash
-git clone https://github.com/your-org/facial-align.git
+git clone https://github.com/VivaanGupta17/facial-align.git
 cd facial-align
 
-# Copy and configure environment
 cp .env.example .env
-# Edit .env — minimum: set SECRET_KEY and PHI_ENCRYPTION_KEY
+# Edit .env — set SECRET_KEY and PHI_ENCRYPTION_KEY
 
-# Pull and start all services
-docker compose up -d
+# Start all services
+make dev-up
 
 # Run database migrations
-docker compose exec backend alembic upgrade head
+make db-migrate
 
-# Verify all services are healthy
-docker compose ps
+# Verify
+make health
+```
+
+### Local development
+
+```bash
+# Backend
+cd apps/backend
+pip install -e ".[dev]"
+uvicorn app.main:app --reload
+
+# Frontend
+cd apps/frontend
+npm install
+npm run dev
+
+# CLI
+pip install -e ".[cli]"
+facial-align --help
 ```
 
 ### Service endpoints
 
-| Service | URL | Notes |
-|---------|-----|-------|
-| API | http://localhost:8000 | FastAPI; docs at /docs |
-| Frontend | http://localhost:3000 | React app |
-| OHIF Viewer | http://localhost:3000/ohif | DICOM viewer |
-| MinIO Console | http://localhost:9001 | minioadmin / minioadmin |
-| MLflow | http://localhost:5000 | Experiment tracking |
-| Flower (Celery) | http://localhost:5555 | Task monitor |
+| Service | URL |
+|---------|-----|
+| API + Docs | http://localhost:8000/docs |
+| Frontend | http://localhost:3000 |
+| MinIO Console | http://localhost:9001 |
 
-### Upload your first case
+---
+
+## CLI
 
 ```bash
-# Upload a DICOM series directory
-curl -X POST http://localhost:8000/api/v1/cases \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "dicom_archive=@/path/to/ct_series.zip"
+# Case management
+facial-align case list --status planning
+facial-align case import-dicom /path/to/dicom --auto-qc --auto-deidentify
+facial-align case export FA-12345678 ./output
 
-# Poll job status
-curl http://localhost:8000/api/v1/cases/{case_id}/status
+# Model management
+facial-align model list
+facial-align model download totalsegmentator
+facial-align model benchmark totalsegmentator --iterations 10
+
+# Pipeline execution
+facial-align pipeline run FA-12345678
+facial-align pipeline run FA-12345678 --step segmentation --dry-run
+facial-align pipeline evaluate plan.json
+
+# Admin
+facial-align admin health
+facial-align admin stats
+facial-align admin audit-log --since 2026-04-01 --action CREATE
+facial-align admin db-seed
 ```
 
 ---
@@ -171,53 +183,61 @@ curl http://localhost:8000/api/v1/cases/{case_id}/status
 ```
 facial-align/
 ├── apps/
-│   ├── backend/              # FastAPI application
-│   │   └── app/
-│   │       ├── api/v1/       # REST endpoints (cases, studies, plans, jobs)
-│   │       ├── core/         # Config, security, logging
-│   │       ├── db/           # SQLAlchemy models, migrations
-│   │       ├── middleware/   # Auth, audit logging, rate limiting
-│   │       ├── models/       # ORM models
-│   │       ├── schemas/      # Pydantic request/response schemas
-│   │       ├── services/     # Business logic (dicom, mesh, segmentation, etc.)
-│   │       └── workers/      # Celery task definitions
-│   └── frontend/             # React + TypeScript
+│   ├── backend/                    # FastAPI application (11,100+ lines)
+│   │   ├── app/
+│   │   │   ├── api/v1/endpoints/   # REST + WebSocket endpoints
+│   │   │   ├── core/               # Config, security, logging, exceptions
+│   │   │   ├── middleware/          # Audit, rate limiting, tracing, errors
+│   │   │   ├── models/             # SQLAlchemy ORM models
+│   │   │   ├── schemas/            # Pydantic request/response schemas
+│   │   │   ├── services/           # Business logic (6 service domains)
+│   │   │   └── workers/            # Celery task definitions
+│   │   └── alembic/                # Database migrations
+│   └── frontend/                   # React + TypeScript (10,400+ lines)
 │       └── src/
-│           ├── components/   # UI components (viewer, planning, dashboard)
-│           ├── hooks/        # Custom React hooks
-│           ├── lib/          # API client, utilities
-│           ├── pages/        # Route-level page components
-│           ├── stores/       # Zustand state stores
-│           └── types/        # TypeScript type definitions
-├── pipelines/                # End-to-end ML pipeline stages
-│   ├── dicom_ingestion/      # DICOM → NIfTI preprocessing
-│   ├── segmentation/         # Segmentation inference pipeline
-│   ├── mesh_extraction/      # NIfTI mask → STL mesh
-│   ├── fracture_reduction/   # Fragment identification + reduction planning
-│   └── occlusion_planning/   # Occlusal constraint computation
-├── services/                 # Standalone microservices
-│   ├── inference/            # TorchServe GPU inference service
-│   ├── mesh_generation/      # Mesh processing service
-│   ├── preprocessing/        # Volume preprocessing service
-│   └── registration/         # CT-to-scan registration service
-├── infra/
-│   ├── docker/               # Dockerfiles per service
-│   ├── kubernetes/           # K8s manifests (prod deployment)
-│   └── monitoring/           # Prometheus + Grafana configs
-├── data_contracts/           # JSON schemas for inter-service data exchange
-├── tests/
-│   ├── unit/                 # Unit tests (backend, frontend, pipelines)
-│   ├── integration/          # End-to-end pipeline tests
-│   └── fixtures/             # Test DICOM data (de-identified)
-├── examples/
-│   ├── notebooks/            # Jupyter notebooks for pipeline exploration
-│   └── sample_data/          # Minimal synthetic CT data for demos
-├── docs/                     # All project documentation
-├── research/                 # Research notes and technology evaluations
-├── scripts/                  # Setup, migration, and utility scripts
-├── .env.example              # Environment variable template
-└── docker-compose.yml        # Full stack development environment
+│           ├── components/         # Viewer, planning, common UI
+│           │   ├── viewer/         # 3D viewer, measurements, cross-section
+│           │   ├── planning/       # Reduction, occlusion, cephalometrics
+│           │   └── common/         # Error boundary, empty states, metrics
+│           ├── hooks/              # Keyboard shortcuts, WebSocket, data
+│           ├── lib/                # API client, geometry, validation, errors
+│           ├── pages/              # Dashboard, case detail, upload
+│           ├── stores/             # Zustand state (case, planning, viewer)
+│           └── types/              # Medical type definitions
+├── services/                       # ML services (7,800+ lines)
+│   ├── inference/                  # Model registry + adapters
+│   │   └── adapters/              # TotalSeg, dental, landmark, symmetry
+│   ├── preprocessing/              # CT preprocessor, QC, de-identification
+│   ├── mesh_generation/            # Mesh extraction, smoothing, export
+│   ├── evaluation/                 # Plan evaluator, report gen, sequencing
+│   ├── benchmark/                  # Pipeline profiling framework
+│   └── registration/               # CT-to-scan registration
+├── pipelines/                      # End-to-end ML pipeline stages
+├── data_contracts/                 # 9 canonical Pydantic schemas (3,500+ lines)
+├── cli/                            # Professional CLI tools (4,800+ lines)
+├── sdk/                            # Python SDK client
+├── tests/                          # 331 tests + fixtures (7,700+ lines)
+├── docs/                           # 11 documentation files
+├── research/                       # 6 research documents
+├── examples/                       # Demo data, exploration notebooks
+├── scripts/                        # Model download, benchmarks, seeding
+└── infra/docker/                   # Docker Compose + Dockerfiles
 ```
+
+---
+
+## What Requires Model Weights
+
+These modules have complete interfaces, data contracts, and baseline algorithms — they need trained weights to achieve clinical accuracy:
+
+| Module | Architecture | Training Data Needed |
+|--------|-------------|---------------------|
+| Learned fracture reduction | PointNet++ backbone, SE(3) output heads, Chamfer + occlusion loss | Paired pre/post-reduction CTs |
+| Learned occlusion model | Graph neural network on dental arch point cloud | Cephalometric annotations |
+| Deep registration | GeoTransformer / DCP candidates | CT-to-scan surface pairs |
+| Learned landmark detection | Heatmap regression on 3D volumes | Manual landmark annotations |
+
+Each module currently runs with a baseline algorithm (ICP, anatomical heuristics, thresholding) that produces functional output today. Learned models slot in through the same `InferenceModel` abstract base class.
 
 ---
 
@@ -225,90 +245,107 @@ facial-align/
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| DICOM ingestion + de-identification | ✅ Functional | pydicom + SimpleITK pipeline |
-| CT preprocessing (resampling, HU windowing) | ✅ Functional | 1.0mm isotropic output |
-| TotalSegmentator integration | ✅ Functional | Skull, mandible, sinuses |
-| DentalSegmentator integration | ✅ Functional | Mandible, teeth, canal |
-| Mesh extraction (marching cubes → STL) | ✅ Functional | PyVista + trimesh |
-| Cephalometric landmark detection | ✅ Functional | 24 landmarks, heatmap regression |
-| OHIF viewer integration | ✅ Functional | DICOM viewer in-browser |
-| Three.js 3D planning scene | ✅ Functional | Bone mesh render + interaction |
-| Celery job queue | ✅ Functional | Redis broker, result backend |
-| FastAPI REST API | ✅ Functional | OpenAPI schema, auth middleware |
-| PostgreSQL case/patient models | ✅ Functional | SQLAlchemy async ORM |
-| MinIO object storage | ✅ Functional | DICOM, NIfTI, STL buckets |
-| Fracture fragment identification | 🔧 Scaffolded | Connected components; reduction algo pending |
-| Occlusal constraint engine | 🔧 Scaffolded | ICP computation; constraint solver pending |
-| Surgical plan suggestion (rule-based) | 🔧 Scaffolded | Movement vector templates defined |
-| CT-to-intraoral scan registration | 🔧 Scaffolded | ICP registration; surface matching pending |
-| PDF planning report export | 🔧 Scaffolded | Template defined; render pipeline pending |
-| Postoperative comparison | 🔧 Scaffolded | Overlay UI pending |
-| Model versioning + A/B testing | 🔧 Scaffolded | MLflow integrated; deployment routing pending |
-| Learned plan suggestion (ML) | 📋 Planned | Phase 2; requires clinical case library |
-| Soft tissue simulation | 📋 Planned | Phase 3 |
-| Automated splint design | 📋 Planned | Phase 3 |
-| Intraoperative navigation export | 📋 Planned | Phase 3 |
-| PACS integration | 📋 Planned | Phase 2 |
+| DICOM ingestion + de-identification | ✅ | PS3.15 Annex E, 71 PHI tags, HMAC pseudonymization |
+| CT quality control (8 checks) | ✅ | A/B/C/F grading per ACR guidelines |
+| CT preprocessing (HU windowing, resampling) | ✅ | Bone/soft tissue windows |
+| TotalSegmentator integration | ✅ | 80%+ CMF anatomy |
+| DentalSegmentator integration | ✅ | Mandible canal, teeth |
+| Mesh extraction + multi-LOD export | ✅ | Gaussian smoothing, PBR materials |
+| Mesh quality analysis + repair | ✅ | Watertight, manifold, self-intersection checks |
+| Cephalometric landmark detection | ✅ | 24 landmarks, anatomical heuristic baseline |
+| Cephalometric analysis (SNA/SNB/ANB) | ✅ | Full angular and linear measurements |
+| Facial symmetry analysis | ✅ | Midsagittal plane, per-structure asymmetry |
+| ICP fracture reduction | ✅ | Point-to-plane ICP baseline |
+| Occlusal constraint engine | ✅ | Molar classification, constraint satisfaction |
+| Surgical plan evaluation | ✅ | Per-fragment metrics, composite grading |
+| Surgical sequence optimization | ✅ | AO CMF principles, graph-based ordering |
+| Clinical report generation | ✅ | Structured Markdown, all sections |
+| Hardware recommendations | ✅ | AO CMF-based, per-structure |
+| 3D planning viewer | ✅ | R3F with fragment manipulation |
+| Measurement tools (3D) | ✅ | Distance, angle, with UI |
+| Cross-section viewer | ✅ | Axial/coronal/sagittal with overlays |
+| Cephalometric overlay (SVG) | ✅ | 17 landmarks, 11 measurements, color-coded |
+| WebSocket real-time updates | ✅ | Job progress, plan updates |
+| HIPAA audit middleware | ✅ | JSON-lines, PHI redaction, async SIEM sink |
+| Rate limiting | ✅ | Token bucket, Redis-backed, 5 endpoint groups |
+| CLI tools (33 commands) | ✅ | Case, model, pipeline, admin |
+| Python SDK | ✅ | Typed async client, retry, job polling |
+| Database migrations | ✅ | Alembic, initial schema |
+| Benchmark framework | ✅ | Per-stage profiling, regression tracking |
+| Learned plan suggestion | 📋 | Phase 2 — needs clinical case library |
+| Soft tissue simulation | 📋 | Phase 3 |
+| Automated splint design + 3D print | 📋 | Phase 3 |
+| Intraoperative navigation export | 📋 | Phase 3 |
+| PACS integration | 📋 | Phase 2 |
 
-**Legend:** ✅ Functional · 🔧 Scaffolded · 📋 Planned
+**Legend:** ✅ Functional · 📋 Planned
 
 ---
 
-## Screenshots
+## Testing
 
-*Visualization screenshots will be added as the UI stabilizes. The planning interface, DICOM viewer, and confidence overlay panels are the primary areas to document.*
+```bash
+# Run all tests
+pytest tests/ -v
 
-| View | Description |
-|------|-------------|
-| Case Dashboard | Patient list, case status, recent activity |
-| DICOM Viewer | OHIF three-plane viewer with segmentation overlay |
-| 3D Planning Scene | Bone meshes, landmark annotations, plan visualization |
-| Confidence Overlay | Per-voxel uncertainty heat map on segmentation |
-| Plan Comparison | Pre-op / planned / post-op three-way overlay |
+# Run specific test suite
+pytest tests/unit/backend/ -v
+pytest tests/unit/schemas/ -v
+pytest tests/integration/ -v
+
+# Run with coverage
+pytest tests/ --cov=apps/backend --cov=services --cov-report=html
+```
+
+331 tests, all mocked — no GPU or external services needed.
+
+---
+
+## Benchmarking
+
+```bash
+python scripts/run_benchmark.py
+python scripts/run_benchmark.py --iterations 20 --output benchmark.md
+python scripts/run_benchmark.py --stages segmentation,mesh_extraction --json
+python scripts/run_benchmark.py --check-regression
+```
 
 ---
 
 ## Contributing
 
-Facial Align follows standard GitHub flow. Before contributing:
+1. Read `docs/architecture/system_design.md` to understand service boundaries
+2. Check the module status table above
+3. Open an issue before starting work on a new feature
+4. Write tests — all pipeline stages have unit tests
+5. Follow HIPAA patterns — no PHI in logs, de-identification before storage
+6. Run `pytest tests/ -v` and `make lint` before submitting a PR
 
-1. **Read the architecture document** (`docs/architecture/system_design.md`) to understand service boundaries.
-2. **Check the module status table** above — avoid duplicating scaffolded work.
-3. **Open an issue** for any feature beyond a bug fix before starting implementation.
-4. **Write tests** — all pipeline stages have corresponding unit tests in `tests/unit/pipelines/`.
-5. **Run the full test suite** before submitting a PR:
-   ```bash
-   docker compose run --rm backend pytest tests/ -v
-   ```
-6. **Follow HIPAA patterns** — no PHI in logs, no raw DICOM in test fixtures, de-identification before storage.
+---
 
-See `CONTRIBUTING.md` for the full contribution guide.
+## Documentation
+
+| Document | Path |
+|----------|------|
+| System Architecture | `docs/architecture/system_design.md` |
+| Product Requirements | `docs/architecture/product_requirements.md` |
+| Roadmap | `docs/architecture/roadmap.md` |
+| Data Flow | `docs/architecture/data_flow.md` |
+| Setup Instructions | `docs/setup.md` |
+| Repo Map | `docs/REPO_MAP.md` |
+| Clinical Workflow | `docs/clinical/clinical_workflow_summary.md` |
+| Regulatory (FDA / HIPAA) | `docs/regulatory/regulatory_considerations.md` |
+| Evaluation Plan | `docs/evaluation/evaluation_plan.md` |
+| Training Plan | `docs/evaluation/training_plan.md` |
+| Clinical Workflow Research | `research/clinical_workflow_research.md` |
+| Competitive Landscape | `research/competitive_landscape.md` |
+| Technical Stack Research | `research/technical_stack_research.md` |
+| OSS Components Review | `research/oss_components_review.md` |
+| AI-Native Principles | `research/ai_native_product_principles.md` |
+| Baseline Scope Decisions | `research/baseline_scope_decisions.md` |
 
 ---
 
 ## License
 
 MIT License. See `LICENSE` for details.
-
----
-
-## Documentation Index
-
-| Document | Path | Contents |
-|----------|------|----------|
-| System Architecture | `docs/architecture/system_design.md` | Service decomposition, data flows, deployment topology |
-| Product Requirements | `docs/architecture/product_requirements.md` | PRD: user stories, feature specs, success metrics |
-| Roadmap | `docs/architecture/roadmap.md` | Phase 1–3 milestones, engineering backlog |
-| Data Flow | `docs/architecture/data_flow.md` | End-to-end pipeline data flows |
-| Setup Instructions | `docs/setup.md` | Prerequisites, local dev, environment variables |
-| Repo Map | `docs/REPO_MAP.md` | Every directory and key file described |
-| Clinical Workflow | `docs/clinical/clinical_workflow_summary.md` | CMF workflow, pain points, how FA transforms each step |
-| Regulatory | `docs/regulatory/regulatory_considerations.md` | FDA SaMD, HIPAA, CE marking |
-| Evaluation Plan | `docs/evaluation/evaluation_plan.md` | Accuracy metrics, clinical validation study design |
-| Training Plan | `docs/evaluation/training_plan.md` | ML training strategy, data flywheel, model versioning |
-| Clinical Workflow Research | `research/clinical_workflow_research.md` | Deep dive into CMF VSP workflows |
-| Competitive Landscape | `research/competitive_landscape.md` | 3D Systems, Materialise, Brainlab, open-source analysis |
-| Technical Stack Research | `research/technical_stack_research.md` | Tool selection rationale |
-| OSS Components Review | `research/oss_components_review.md` | Component-by-component evaluation |
-| AI-Native Principles | `research/ai_native_product_principles.md` | Design philosophy and UX framework |
-| Baseline Scope Decisions | `research/baseline_scope_decisions.md` | What's in Phase 1 and why |
