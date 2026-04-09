@@ -532,3 +532,254 @@ class CompositeDentalLoss(nn.Module):
 
         loss_dict["total"] = total
         return total, loss_dict
+
+
+# ─── Supervised SE(3) transform regression loss ─────────────────────────────
+
+
+class TransformRegressionLoss(nn.Module):
+    """
+    Supervised loss for SE(3) transform prediction.
+
+    Combines geodesic distance on SO(3) for the rotation component
+    with L2 distance for the translation component. This is superior
+    to naively applying L2 on the full 4x4 matrix because rotations
+    live on a curved manifold.
+
+    Geodesic distance on SO(3):
+        d(R_pred, R_gt) = arccos( (trace(R_pred^T @ R_gt) - 1) / 2 )
+
+    References:
+    - Huynh (2009): Metrics for 3D Rotations
+    - PMC11574221: Composite objective for dental fracture reduction
+    """
+
+    def __init__(
+        self,
+        rotation_weight: float = 1.0,
+        translation_weight: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.w_rot = rotation_weight
+        self.w_trans = translation_weight
+
+    def forward(
+        self,
+        predicted_transforms: Dict[str, torch.Tensor],
+        ground_truth_transforms: Dict[str, torch.Tensor],
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Args:
+            predicted_transforms: fragment_id → (4, 4) predicted transform.
+            ground_truth_transforms: fragment_id → (4, 4) ground truth transform.
+
+        Returns:
+            total_loss: Scalar combined rotation + translation loss.
+            loss_dict: Dict with 'rotation', 'translation', 'total' losses.
+        """
+        rot_losses = []
+        trans_losses = []
+
+        # Iterate over shared fragments
+        shared_ids = set(predicted_transforms.keys()) & set(ground_truth_transforms.keys())
+        if not shared_ids:
+            device = next(iter(predicted_transforms.values())).device
+            zero = torch.tensor(0.0, device=device)
+            return zero, {"rotation": zero, "translation": zero, "total": zero}
+
+        for fid in shared_ids:
+            T_pred = predicted_transforms[fid]  # (4, 4)
+            T_gt = ground_truth_transforms[fid]  # (4, 4)
+
+            # Rotation: geodesic distance on SO(3)
+            R_pred = T_pred[:3, :3]
+            R_gt = T_gt[:3, :3]
+            R_diff = R_pred.T @ R_gt
+            # Clamp trace to valid arccos range [-1, 3]
+            trace_val = R_diff.diagonal().sum()
+            cos_angle = (trace_val - 1.0) / 2.0
+            cos_angle = cos_angle.clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+            geo_dist = torch.acos(cos_angle)  # radians
+            rot_losses.append(geo_dist)
+
+            # Translation: L2 distance in mm
+            t_pred = T_pred[:3, 3]
+            t_gt = T_gt[:3, 3]
+            trans_dist = (t_pred - t_gt).pow(2).sum().sqrt()
+            trans_losses.append(trans_dist)
+
+        rot_loss = torch.stack(rot_losses).mean()
+        trans_loss = torch.stack(trans_losses).mean()
+        total = self.w_rot * rot_loss + self.w_trans * trans_loss
+
+        return total, {
+            "rotation": rot_loss,
+            "translation": trans_loss,
+            "total": total,
+        }
+
+
+# ─── Supervised metric prediction loss ──────────────────────────────────────
+
+
+class MetricPredictionLoss(nn.Module):
+    """
+    MSE loss on predicted vs ground truth clinical occlusal metrics.
+
+    Supports variable-length metric dictionaries — only computes loss
+    on metrics present in both prediction and ground truth.
+
+    Metric keys include: overjet_mm, overbite_mm, midline_deviation_mm,
+    molar_class_angle, open_bite_mm, crossbite_count, bolton_ratio, etc.
+    """
+
+    def __init__(
+        self,
+        metric_weights: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """
+        Args:
+            metric_weights: Per-metric weights. Defaults to uniform (1.0).
+                Example: {"overjet_mm": 2.0, "midline_deviation_mm": 1.5}.
+        """
+        super().__init__()
+        self.metric_weights = metric_weights or {}
+
+    def forward(
+        self,
+        predicted_metrics: Dict[str, torch.Tensor],
+        ground_truth_metrics: Dict[str, torch.Tensor],
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Args:
+            predicted_metrics: metric_name → scalar Tensor.
+            ground_truth_metrics: metric_name → scalar Tensor.
+
+        Returns:
+            total_loss: Weighted MSE across all shared metrics.
+            per_metric: Dict of per-metric squared errors.
+        """
+        shared_keys = set(predicted_metrics.keys()) & set(ground_truth_metrics.keys())
+        if not shared_keys:
+            device = (
+                next(iter(predicted_metrics.values())).device
+                if predicted_metrics
+                else torch.device("cpu")
+            )
+            zero = torch.tensor(0.0, device=device)
+            return zero, {"total": zero}
+
+        per_metric: Dict[str, torch.Tensor] = {}
+        total = torch.tensor(
+            0.0,
+            device=next(iter(predicted_metrics.values())).device,
+        )
+
+        for key in shared_keys:
+            pred = predicted_metrics[key]
+            gt = ground_truth_metrics[key]
+            mse = (pred - gt).pow(2)
+            w = self.metric_weights.get(key, 1.0)
+            total = total + w * mse
+            per_metric[key] = mse
+
+        per_metric["total"] = total
+        return total, per_metric
+
+
+# ─── Supervised + self-supervised composite ─────────────────────────────────
+
+
+class SupervisedCompositeLoss(nn.Module):
+    """
+    Combines supervised and self-supervised losses for training.
+
+    L_total = w_supervised * (L_transform + L_metrics)
+            + w_self_supervised * L_composite_dental
+
+    When ground truth is unavailable (e.g., for unpaired IOS scans),
+    only the self-supervised component is active. This enables
+    semi-supervised training with mixed labeled + unlabeled data.
+    """
+
+    def __init__(
+        self,
+        composite_dental_loss: CompositeDentalLoss,
+        w_supervised: float = 1.0,
+        w_self_supervised: float = 1.0,
+        w_transform: float = 1.0,
+        w_metrics: float = 1.0,
+        metric_weights: Optional[Dict[str, float]] = None,
+    ) -> None:
+        super().__init__()
+        self.dental_loss = composite_dental_loss
+        self.transform_loss = TransformRegressionLoss()
+        self.metric_loss = MetricPredictionLoss(metric_weights=metric_weights)
+        self.w_supervised = w_supervised
+        self.w_self_supervised = w_self_supervised
+        self.w_transform = w_transform
+        self.w_metrics = w_metrics
+
+    def forward(
+        self,
+        upper_points: torch.Tensor,
+        lower_points: torch.Tensor,
+        predicted_transforms: Optional[Dict[str, torch.Tensor]] = None,
+        gt_transforms: Optional[Dict[str, torch.Tensor]] = None,
+        predicted_metrics: Optional[Dict[str, torch.Tensor]] = None,
+        gt_metrics: Optional[Dict[str, torch.Tensor]] = None,
+        upper_midline: Optional[torch.Tensor] = None,
+        lower_midline: Optional[torch.Tensor] = None,
+        upper_molar_landmarks: Optional[torch.Tensor] = None,
+        lower_molar_landmarks: Optional[torch.Tensor] = None,
+        predicted_centroids: Optional[torch.Tensor] = None,
+        target_centroids: Optional[torch.Tensor] = None,
+        normals_lower: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Compute combined supervised + self-supervised loss.
+
+        Returns:
+            total_loss: Scalar.
+            loss_dict: Full breakdown of all loss components.
+        """
+        device = upper_points.device
+        loss_dict: Dict[str, torch.Tensor] = {}
+        total = torch.tensor(0.0, device=device)
+
+        # Self-supervised: composite dental loss (always active)
+        ss_loss, ss_dict = self.dental_loss(
+            upper_points=upper_points,
+            lower_points=lower_points,
+            upper_midline=upper_midline,
+            lower_midline=lower_midline,
+            upper_molar_landmarks=upper_molar_landmarks,
+            lower_molar_landmarks=lower_molar_landmarks,
+            predicted_centroids=predicted_centroids,
+            target_centroids=target_centroids,
+            normals_lower=normals_lower,
+        )
+        for k, v in ss_dict.items():
+            loss_dict[f"ss/{k}"] = v
+        total = total + self.w_self_supervised * ss_loss
+
+        # Supervised: transform regression (only if GT available)
+        if predicted_transforms and gt_transforms:
+            t_loss, t_dict = self.transform_loss(
+                predicted_transforms, gt_transforms,
+            )
+            for k, v in t_dict.items():
+                loss_dict[f"sup/transform/{k}"] = v
+            total = total + self.w_supervised * self.w_transform * t_loss
+
+        # Supervised: metric prediction (only if GT available)
+        if predicted_metrics and gt_metrics:
+            m_loss, m_dict = self.metric_loss(
+                predicted_metrics, gt_metrics,
+            )
+            for k, v in m_dict.items():
+                loss_dict[f"sup/metric/{k}"] = v
+            total = total + self.w_supervised * self.w_metrics * m_loss
+
+        loss_dict["total"] = total
+        return total, loss_dict

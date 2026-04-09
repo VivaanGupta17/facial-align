@@ -43,6 +43,9 @@ class ModelType(str, Enum):
     REGISTRATION = "registration"
     OCCLUSION = "occlusion"
     LANDMARK = "landmark"
+    # Supervised-learning-first model types
+    SUPERVISED_REDUCTION = "supervised_reduction"
+    SUPERVISED_OCCLUSION = "supervised_occlusion"
 
 
 @dataclass
@@ -214,6 +217,15 @@ class ModelRegistry:
         elif version.model_type == ModelType.REGISTRATION:
             from services.inference.adapters.registration_adapter import RegistrationModel
             return RegistrationModel(version, device=self.device)
+
+        elif version.model_type in (
+            ModelType.SUPERVISED_REDUCTION,
+            ModelType.SUPERVISED_OCCLUSION,
+        ):
+            from services.inference.adapters.supervised_adapter import (
+                SupervisedReductionModel,
+            )
+            return SupervisedReductionModel(version, device=self.device)
 
         else:
             raise ValueError(f"Unknown model type: {version.model_type}")

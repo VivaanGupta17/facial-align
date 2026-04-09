@@ -1,0 +1,146 @@
+# ─── Supervised Model Training Configuration ────────────────────────────────
+#
+# Configuration for training the FacialAlignSupervisedModel.
+# Two-stage schedule: MSE rotation (epochs 1-50) → geodesic (51+).
+#
+# Usage:
+#   python -m training.train_supervised --config training/configs/supervised_config.yaml
+#
+# References:
+#   - FracFormer (IEEE TMI 2025): Training protocol
+#   - Swin-T Tooth Alignment: Per-tooth evaluation
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Model Architecture ──
+model:
+  ct_encoder:
+    ct_feat_dim: 512
+    in_channels: 1
+    base_channels: 64
+    layer_depths: [3, 4, 6, 3]  # ResNet-50 depths
+    hu_min: 0.0
+    hu_max: 3000.0
+    dropout_rate: 0.0
+
+  ios_encoder:
+    per_tooth_dim: 256
+    arch_dim: 512
+    dgcnn_k: 20
+    max_teeth: 32
+    points_per_tooth: 1024
+    num_cross_tooth_layers: 4
+    num_attention_heads: 8
+    feedforward_dim: 1024
+    dropout_rate: 0.1
+
+  fusion:
+    ct_feat_dim: 512
+    ios_feat_dim: 512
+    fused_dim: 1024
+    num_heads: 8
+    num_layers: 4
+    dropout: 0.1
+    ios_dropout_p: 0.3  # IOS modality dropout during training
+
+  max_fragments: 8
+  max_teeth: 32
+  mc_dropout_p: 0.1
+  mc_dropout_passes: 10
+
+# ── Training ──
+training:
+  num_epochs: 200
+  batch_size: 2               # Limited by 3D CT volume memory
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  gradient_clip_norm: 1.0
+  gradient_accumulation_steps: 4  # Effective batch = 2 × 4 = 8
+
+  # Two-stage rotation loss schedule
+  phase_transition_epoch: 50
+  warmup_epochs: 10
+  cosine_min_lr: 1.0e-6
+
+  # Mixed precision
+  use_amp: true
+
+  # Validation
+  val_every_n_epochs: 5
+  mc_dropout_passes: 10
+
+  # Checkpointing
+  checkpoint_dir: "checkpoints/supervised"
+  save_every_n_epochs: 10
+  keep_top_k: 3
+
+# ── Loss Function Weights ──
+loss:
+  fragment_transform: 1.0
+  tooth_transform: 1.0
+  clinical_metrics: 1.0
+  uncertainty: 0.1
+  symmetry: 0.3
+
+  # Rotation sub-weights (within transform loss)
+  rotation_weight: 2.0
+  translation_weight: 1.0
+
+  # Clinical metric sub-weights
+  metric_weight: 1.0
+  class_weight: 0.5
+
+# ── Dataset ──
+dataset:
+  manifest_path: "data/training_manifest.json"
+  max_fragments: 8
+  max_teeth: 32
+  points_per_tooth: 1024
+  target_spacing_mm: 0.4
+  hu_min: 0.0
+  hu_max: 3000.0
+  crop_size: [128, 128, 128]
+  augment: true
+  cache_ct: false
+
+# ── Synthetic Data Generation ──
+synthetic:
+  # Generate from normal mandible CTs
+  num_cases_per_mesh: 10
+  seed: 42
+  output_dir: "data/synthetic_fractures"
+
+  # Fracture pattern distribution (epidemiological)
+  patterns:
+    parasymphyseal: 0.30
+    body: 0.25
+    angle: 0.20
+    condylar: 0.15
+    symphysis: 0.10
+
+# ── Inference ──
+inference:
+  checkpoint_path: "checkpoints/supervised/best_model.pt"
+  device: "cuda"
+  use_mixed_precision: true
+  use_mc_dropout: true
+  mc_dropout_passes: 10
+
+  # Confidence thresholds
+  accept_threshold: 0.8
+  review_threshold: 0.5
+  fallback_threshold: 0.5
+  reject_threshold: 0.3
+
+# ── Hardware ──
+hardware:
+  # GPU memory optimisation
+  use_gradient_checkpointing: false  # Enable if GPU memory < 8GB
+  num_workers: 2
+  pin_memory: true
+
+# ── Logging ──
+logging:
+  log_every_n_steps: 10
+  use_wandb: false
+  wandb_project: "facial-align-supervised"
+  wandb_entity: null
