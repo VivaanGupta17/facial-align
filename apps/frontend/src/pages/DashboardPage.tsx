@@ -1,12 +1,14 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   FolderOpen, Upload, BoxSelect, Plus, TrendingUp, TrendingDown,
-  Clock, CheckCircle, Cpu, HardDrive, Activity, Layers,
+  Clock, CheckCircle, Cpu, HardDrive, Activity, Layers, RefreshCw,
+  X, AlertCircle, Sparkles,
 } from 'lucide-react'
 import { dashboardApi, casesApi } from '../lib/api'
 import StatusBadge from '../components/common/StatusBadge'
-import { ErrorState, Skeleton } from '../components/common/LoadingOverlay'
+import { Skeleton } from '../components/common/LoadingOverlay'
 import type { CaseListItem, GpuStatus } from '../types/medical'
 
 // ---------------------------
@@ -29,6 +31,52 @@ function fmtCaseType(type: string) {
 function truncateId(id: string) {
   if (!id) return '—'
   return id.length > 8 ? `${id.slice(0, 8)}...` : id
+}
+
+// ---------------------------
+// Dismissable Error Banner
+// ---------------------------
+function ErrorBanner({ message, onDismiss, onRetry }: { message: string; onDismiss: () => void; onRetry?: () => void }) {
+  return (
+    <div className="flex items-center gap-2 p-3 bg-red-950/60 border border-red-800 rounded-lg text-sm animate-fade-in" data-testid="error-banner">
+      <AlertCircle size={15} className="text-red-400 shrink-0" />
+      <span className="flex-1 text-red-300">{message}</span>
+      {onRetry && (
+        <button onClick={onRetry} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors shrink-0">
+          <RefreshCw size={12} /> Retry
+        </button>
+      )}
+      <button onClick={onDismiss} className="text-red-400/60 hover:text-red-300 transition-colors shrink-0" data-testid="error-banner-dismiss">
+        <X size={14} />
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------
+// Welcome Card (zero cases)
+// ---------------------------
+function WelcomeCard() {
+  const navigate = useNavigate()
+  return (
+    <div className="flex flex-col items-center justify-center py-12 px-6 text-center" data-testid="welcome-card">
+      <div className="w-16 h-16 rounded-full bg-cyan-950 border border-cyan-800 flex items-center justify-center mb-4">
+        <Sparkles size={28} className="text-cyan-400" />
+      </div>
+      <h3 className="text-lg font-semibold text-slate-100 mb-2">Welcome to Facial Align</h3>
+      <p className="text-sm text-slate-400 max-w-md mb-6">
+        Get started by uploading a DICOM study. The AI pipeline will automatically segment anatomical structures and generate a surgical reduction plan.
+      </p>
+      <div className="flex gap-3">
+        <button onClick={() => navigate('/upload')} className="flex items-center gap-2 btn-primary" data-testid="welcome-upload-btn">
+          <Upload size={15} /> Upload DICOM
+        </button>
+        <button onClick={() => navigate('/cases')} className="flex items-center gap-2 btn-secondary">
+          <FolderOpen size={15} /> Browse Cases
+        </button>
+      </div>
+    </div>
+  )
 }
 
 // ---------------------------
@@ -134,33 +182,68 @@ function RecentCasesTable({ cases }: { cases: CaseListItem[] }) {
 }
 
 // ---------------------------
+// Panel Refresh Button
+// ---------------------------
+function RefreshButton({ onClick, className = '' }: { onClick: () => void; className?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors ${className}`}
+      title="Refresh"
+      data-testid="refresh-btn"
+    >
+      <RefreshCw size={13} />
+    </button>
+  )
+}
+
+// ---------------------------
 // Main Dashboard
 // ---------------------------
 export default function DashboardPage() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const [statsErrorDismissed, setStatsErrorDismissed] = useState(false)
+  const [healthErrorDismissed, setHealthErrorDismissed] = useState(false)
 
-  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
+  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: dashboardApi.getStats,
     refetchInterval: 30_000,
   })
 
-  const { data: health, isLoading: healthLoading } = useQuery({
+  const { data: health, isLoading: healthLoading, error: healthError, refetch: refetchHealth } = useQuery({
     queryKey: ['system-health'],
     queryFn: dashboardApi.getSystemHealth,
     refetchInterval: 15_000,
   })
 
-  const { data: recentCasesData, isLoading: casesLoading } = useQuery({
+  const { data: recentCasesData, isLoading: casesLoading, refetch: refetchCases } = useQuery({
     queryKey: ['recent-cases'],
     queryFn: () => casesApi.getRecent(10),
     refetchInterval: 30_000,
   })
 
-  if (statsError) return <ErrorState description="Failed to load dashboard data" />
+  const zeroCases = !casesLoading && recentCasesData && recentCasesData.length === 0
 
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl mx-auto animate-fade-in" data-testid="dashboard-page">
+
+      {/* Dismissable error banners */}
+      {statsError && !statsErrorDismissed && (
+        <ErrorBanner
+          message="Failed to load dashboard statistics."
+          onDismiss={() => setStatsErrorDismissed(true)}
+          onRetry={() => { setStatsErrorDismissed(false); refetchStats() }}
+        />
+      )}
+      {healthError && !healthErrorDismissed && (
+        <ErrorBanner
+          message="System health data unavailable."
+          onDismiss={() => setHealthErrorDismissed(true)}
+          onRetry={() => { setHealthErrorDismissed(false); refetchHealth() }}
+        />
+      )}
 
       {/* Page header */}
       <div className="flex items-center justify-between">
@@ -252,12 +335,15 @@ export default function DashboardPage() {
                 </span>
               )}
             </div>
-            <button
-              onClick={() => navigate('/cases')}
-              className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-            >
-              View all →
-            </button>
+            <div className="flex items-center gap-2">
+              <RefreshButton onClick={() => refetchCases()} />
+              <button
+                onClick={() => navigate('/cases')}
+                className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
+                View all →
+              </button>
+            </div>
           </div>
 
           {casesLoading ? (
@@ -266,13 +352,11 @@ export default function DashboardPage() {
                 <tbody><TableSkeleton /></tbody>
               </table>
             </div>
+          ) : zeroCases ? (
+            <WelcomeCard />
           ) : recentCasesData && recentCasesData.length > 0 ? (
             <RecentCasesTable cases={recentCasesData} />
-          ) : (
-            <div className="flex items-center justify-center h-40 text-slate-500 text-sm">
-              No recent cases
-            </div>
-          )}
+          ) : null}
         </div>
 
         {/* Right column */}
@@ -312,12 +396,23 @@ export default function DashboardPage() {
                 <Activity size={15} className="text-emerald-400" />
                 <h2 className="panel-title">System Health</h2>
               </div>
-              <span className="text-2xs font-mono text-slate-500">Live</span>
+              <div className="flex items-center gap-2">
+                <RefreshButton onClick={() => refetchHealth()} />
+                <span className="text-2xs font-mono text-slate-500">Live</span>
+              </div>
             </div>
             <div className="p-3 space-y-3">
               {healthLoading ? (
                 <div className="space-y-2">
                   {Array(3).fill(0).map((_, i) => <Skeleton key={i} className="h-14" />)}
+                </div>
+              ) : healthError ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center" data-testid="health-unavailable">
+                  <Activity size={24} className="text-slate-600 mb-2" />
+                  <p className="text-sm text-slate-500">System health unavailable</p>
+                  <button onClick={() => refetchHealth()} className="mt-2 text-xs text-cyan-400 hover:text-cyan-300">
+                    Retry
+                  </button>
                 </div>
               ) : health ? (
                 <>

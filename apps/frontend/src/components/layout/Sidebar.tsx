@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -47,9 +47,17 @@ const navSections: Array<{ title: string; items: NavItem[] }> = [
 ]
 
 export default function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 1024)
   const { activeCase } = useCaseStore()
   const location = useLocation()
+
+  // Auto-collapse on narrow viewports
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)')
+    const handler = (e: MediaQueryListEvent) => setCollapsed(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
 
   return (
     <aside

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc } from 'lucide-react'
+import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc, Upload, FolderOpen, X } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
 import StatusBadge from '../components/common/StatusBadge'
 import { ErrorState, EmptyState, TableSkeleton } from '../components/common/LoadingOverlay'
@@ -53,8 +53,19 @@ export default function CaseListPage() {
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [showFilters, setShowFilters] = useState(false)
+  const [page, setPage] = useState(1)
+
+  const hasActiveFilters = !!statusFilter || !!typeFilter || !!search
+
+  const clearFilters = () => {
+    setSearch('')
+    setStatusFilter('')
+    setTypeFilter('')
+    setPage(1)
+  }
 
   const { data, isLoading, error, refetch } = useCases({
+    page,
     status: statusFilter ? [statusFilter] : undefined,
     type: typeFilter ? [typeFilter] : undefined,
     search: search || undefined,
@@ -100,7 +111,7 @@ export default function CaseListPage() {
               type="text"
               placeholder="Search case number, patient ID..."
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setPage(1) }}
               className="input-base pl-9"
               data-testid="search-input"
             />
@@ -110,7 +121,7 @@ export default function CaseListPage() {
           <div className="relative">
             <select
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as CaseStatus | '')}
+              onChange={e => { setStatusFilter(e.target.value as CaseStatus | ''); setPage(1) }}
               className="select-base w-44"
               data-testid="status-filter"
             >
@@ -122,13 +133,25 @@ export default function CaseListPage() {
           <div className="relative">
             <select
               value={typeFilter}
-              onChange={e => setTypeFilter(e.target.value as CaseType | '')}
+              onChange={e => { setTypeFilter(e.target.value as CaseType | ''); setPage(1) }}
               className="select-base w-44"
               data-testid="type-filter"
             >
               {TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
+
+          {/* Clear filters */}
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1.5 btn-ghost text-sm text-slate-400 hover:text-slate-200"
+              data-testid="clear-filters-btn"
+            >
+              <X size={14} />
+              Clear
+            </button>
+          )}
 
           {/* Advanced filters toggle */}
           <button
@@ -205,15 +228,29 @@ export default function CaseListPage() {
                 ) : data?.items.length === 0 ? (
                   <tr>
                     <td colSpan={8}>
-                      <EmptyState
-                        title="No cases found"
-                        description="Try adjusting filters or create a new case."
-                        action={
-                          <button onClick={() => navigate('/upload')} className="btn-primary">
-                            Create Case
-                          </button>
-                        }
-                      />
+                      {hasActiveFilters ? (
+                        <EmptyState
+                          title="No cases match your filters"
+                          description="Try adjusting your search or filter criteria."
+                          icon={<Search size={32} />}
+                          action={
+                            <button onClick={clearFilters} className="btn-secondary" data-testid="empty-clear-filters-btn">
+                              Clear Filters
+                            </button>
+                          }
+                        />
+                      ) : (
+                        <EmptyState
+                          title="No cases found"
+                          description="Upload a DICOM study to get started."
+                          icon={<FolderOpen size={32} />}
+                          action={
+                            <button onClick={() => navigate('/upload')} className="flex items-center gap-2 btn-primary" data-testid="empty-upload-btn">
+                              <Upload size={15} /> Upload DICOM
+                            </button>
+                          }
+                        />
+                      )}
                     </td>
                   </tr>
                 ) : data?.items.map(c => (
@@ -256,13 +293,27 @@ export default function CaseListPage() {
 
         {/* Pagination */}
         {data && data.total > data.pageSize && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700">
+          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700" data-testid="pagination">
             <span className="text-xs text-slate-500">
               Showing {(data.page - 1) * data.pageSize + 1}–{Math.min(data.page * data.pageSize, data.total)} of {data.total}
             </span>
             <div className="flex gap-1">
-              <button className="btn-secondary text-xs px-3 py-1.5" disabled={data.page === 1}>Previous</button>
-              <button className="btn-secondary text-xs px-3 py-1.5" disabled={!data.hasMore}>Next</button>
+              <button
+                className="btn-secondary text-xs px-3 py-1.5"
+                disabled={data.page <= 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                data-testid="pagination-prev"
+              >
+                Previous
+              </button>
+              <button
+                className="btn-secondary text-xs px-3 py-1.5"
+                disabled={!data.hasMore}
+                onClick={() => setPage(p => p + 1)}
+                data-testid="pagination-next"
+              >
+                Next
+              </button>
             </div>
           </div>
         )}

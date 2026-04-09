@@ -1,14 +1,22 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Clock, User, FileText, Layers, Target, AlignCenter, ClipboardCheck, History } from 'lucide-react'
+import {
+  ArrowLeft, Clock, User, FileText, Layers, Target, AlignCenter,
+  ClipboardCheck, History, AlertTriangle, Play, CheckCircle, XCircle,
+} from 'lucide-react'
 import { useCase } from '../hooks/useCases'
 import { useCaseStore } from '../stores/caseStore'
+import { useToastStore } from '../stores/toastStore'
 import StatusBadge from '../components/common/StatusBadge'
-import { PageLoading, ErrorState } from '../components/common/LoadingOverlay'
+import { PageLoading, Skeleton } from '../components/common/LoadingOverlay'
+import JobProgressBar from '../components/common/JobProgressBar'
 import SegmentationReview from '../components/planning/SegmentationReview'
 import ReductionWorkspace from '../components/planning/ReductionWorkspace'
 import OcclusionWorkspace from '../components/planning/OcclusionWorkspace'
 import SurgeonReview from '../components/planning/SurgeonReview'
+import { casesApi } from '../lib/api'
+import { useWebSocket, type WsMessage } from '../hooks/useWebSocket'
+import type { SurgicalCase } from '../types/medical'
 
 type Tab = 'overview' | 'segmentation' | 'planning' | 'occlusion' | 'review' | 'history'
 
@@ -20,6 +28,16 @@ const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
   { id: 'review', label: 'Review', icon: <ClipboardCheck size={14} /> },
   { id: 'history', label: 'History', icon: <History size={14} /> },
 ]
+
+// Irreversible transitions that need confirmation
+const IRREVERSIBLE_TRANSITIONS = ['approved', 'rejected', 'completed', 'archived']
+
+const TRANSITION_STYLES: Record<string, { bg: string; text: string; icon: React.ReactNode }> = {
+  approved: { bg: 'bg-emerald-950 border-emerald-800 hover:bg-emerald-900', text: 'text-emerald-400', icon: <CheckCircle size={14} /> },
+  rejected: { bg: 'bg-red-950 border-red-800 hover:bg-red-900', text: 'text-red-400', icon: <XCircle size={14} /> },
+  completed: { bg: 'bg-emerald-950 border-emerald-800 hover:bg-emerald-900', text: 'text-emerald-400', icon: <CheckCircle size={14} /> },
+  default: { bg: 'bg-slate-800 border-slate-700 hover:bg-slate-700', text: 'text-cyan-400', icon: <Play size={14} /> },
+}
 
 function fmtDateTime(iso: string | null | undefined) {
   if (!iso) return '—'
@@ -38,10 +56,107 @@ function truncateId(id: string | null) {
   return id.length > 12 ? `${id.slice(0, 8)}...` : id
 }
 
+function fmtTransition(t: string) {
+  return t.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+}
+
+// ---------------------------
+// 404 Not Found
+// ---------------------------
+function CaseNotFound({ caseId }: { caseId?: string }) {
+  const navigate = useNavigate()
+  return (
+    <div className="flex flex-col items-center justify-center h-full min-h-[400px] py-12 px-6 text-center animate-fade-in" data-testid="case-not-found">
+      <div className="w-16 h-16 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-4">
+        <AlertTriangle size={28} className="text-amber-400" />
+      </div>
+      <h2 className="text-lg font-semibold text-slate-100 mb-2">Case Not Found</h2>
+      <p className="text-sm text-slate-400 max-w-sm mb-6">
+        {caseId ? `Case "${caseId}" does not exist or you don't have permission to view it.` : 'No case ID was provided.'}
+      </p>
+      <button
+        onClick={() => navigate('/cases')}
+        className="flex items-center gap-2 btn-primary"
+        data-testid="back-to-cases-btn"
+      >
+        <ArrowLeft size={15} /> Back to Cases
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------
+// Status Transition Buttons
+// ---------------------------
+function StatusTransitions({
+  caseData,
+  onTransition,
+}: {
+  caseData: SurgicalCase
+  onTransition: (status: string) => void
+}) {
+  const [confirmingTransition, setConfirmingTransition] = useState<string | null>(null)
+  const [isTransitioning, setIsTransitioning] = useState(false)
+  const { addToast } = useToastStore()
+
+  const handleClick = async (transition: string) => {
+    if (IRREVERSIBLE_TRANSITIONS.includes(transition) && confirmingTransition !== transition) {
+      setConfirmingTransition(transition)
+      return
+    }
+
+    setIsTransitioning(true)
+    try {
+      await casesApi.transitionStatus(caseData.id, transition)
+      addToast({ type: 'success', message: `Case status changed to ${fmtTransition(transition)}` })
+      onTransition(transition)
+    } catch (err) {
+      addToast({ type: 'error', message: `Failed to transition: ${err instanceof Error ? err.message : 'Unknown error'}` })
+    } finally {
+      setIsTransitioning(false)
+      setConfirmingTransition(null)
+    }
+  }
+
+  if (caseData.allowedTransitions.length === 0) return null
+
+  return (
+    <div className="flex items-center gap-2" data-testid="status-transitions">
+      {caseData.allowedTransitions.map(t => {
+        const style = TRANSITION_STYLES[t] ?? TRANSITION_STYLES.default
+        const isConfirming = confirmingTransition === t
+
+        return (
+          <div key={t} className="flex items-center gap-1">
+            {isConfirming && (
+              <button
+                onClick={() => setConfirmingTransition(null)}
+                className="text-xs text-slate-500 hover:text-slate-300 px-2 py-1"
+                data-testid={`cancel-confirm-${t}`}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              onClick={() => handleClick(t)}
+              disabled={isTransitioning}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors disabled:opacity-50 ${style.bg} ${style.text}`}
+              data-testid={`transition-${t}`}
+            >
+              {style.icon}
+              {isConfirming ? `Confirm ${fmtTransition(t)}` : fmtTransition(t)}
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ---------------------------
 // Overview Tab
 // ---------------------------
-function OverviewTab({ caseData }: { caseData: NonNullable<ReturnType<typeof useCase>['data']> }) {
+function OverviewTab({ caseData }: { caseData: SurgicalCase }) {
   return (
     <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in" data-testid="overview-tab">
       {/* Left: Case info */}
@@ -72,6 +187,39 @@ function OverviewTab({ caseData }: { caseData: NonNullable<ReturnType<typeof use
           </div>
         </div>
 
+        {/* Segmentation status */}
+        {!caseData.latestSegmentation && (
+          <div className="card p-4 border-slate-700" data-testid="no-segmentation">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center">
+                <Layers size={20} className="text-slate-500" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-slate-300">No segmentation run yet</p>
+                <p className="text-xs text-slate-500">Run AI segmentation to identify anatomical structures</p>
+              </div>
+              <button className="btn-primary text-xs" data-testid="run-segmentation-btn">
+                Run Segmentation
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Plan status */}
+        {!caseData.latestPlan && caseData.latestSegmentation && (
+          <div className="card p-4 border-slate-700" data-testid="no-plan">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center">
+                <Target size={20} className="text-slate-500" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-300">No reduction plan generated yet</p>
+                <p className="text-xs text-slate-500">Generate an AI-powered surgical reduction plan</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Diagnosis codes */}
         <div className="card p-4">
           <h3 className="text-sm font-semibold text-slate-200 border-b border-slate-700 pb-2 mb-3">Diagnosis Codes</h3>
@@ -88,23 +236,9 @@ function OverviewTab({ caseData }: { caseData: NonNullable<ReturnType<typeof use
           )}
         </div>
 
-        {/* Allowed Transitions */}
-        {caseData.allowedTransitions.length > 0 && (
-          <div className="card p-4">
-            <h3 className="text-sm font-semibold text-slate-200 border-b border-slate-700 pb-2 mb-3">Available Actions</h3>
-            <div className="flex flex-wrap gap-2">
-              {caseData.allowedTransitions.map(t => (
-                <span key={t} className="text-xs bg-cyan-950 text-cyan-400 border border-cyan-900 px-2 py-1 rounded capitalize">
-                  {t.replace(/_/g, ' ')}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Error display */}
         {caseData.lastError && (
-          <div className="card p-4 border-red-800 bg-red-950/30">
+          <div className="card p-4 border-red-800 bg-red-950/30" data-testid="case-error">
             <h3 className="text-sm font-semibold text-red-400 border-b border-red-800 pb-2 mb-3">Last Error</h3>
             <p className="text-sm text-red-300 font-mono">{caseData.lastError}</p>
           </div>
@@ -168,14 +302,13 @@ function OverviewTab({ caseData }: { caseData: NonNullable<ReturnType<typeof use
 // ---------------------------
 // History Tab
 // ---------------------------
-function HistoryTab({ caseData }: { caseData: NonNullable<ReturnType<typeof useCase>['data']> }) {
+function HistoryTab({ caseData }: { caseData: SurgicalCase }) {
   return (
     <div className="p-6 animate-fade-in" data-testid="history-tab">
       <h3 className="text-sm font-semibold text-slate-200 mb-4">Audit Log & Timeline</h3>
       <div className="relative">
         <div className="absolute left-4 top-0 bottom-0 w-px bg-slate-700" />
         <div className="space-y-4">
-          {/* Build a basic timeline from available case data */}
           {[
             { id: 'created', event: 'Case Created', description: `Case ${caseData.caseNumber} created`, performedAt: caseData.createdAt, performedBy: caseData.createdBy ?? 'System' },
             ...(caseData.updatedAt !== caseData.createdAt ? [{ id: 'updated', event: 'Case Updated', description: `Status: ${caseData.status}`, performedAt: caseData.updatedAt, performedBy: 'System' }] : []),
@@ -206,8 +339,34 @@ export default function CaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>()
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('overview')
-  const { data: caseData, isLoading, error } = useCase(caseId ?? '')
+  const { data: caseData, isLoading, error, refetch } = useCase(caseId ?? '')
   const { setActiveCase } = useCaseStore()
+  const { addToast } = useToastStore()
+
+  // Job progress state for WebSocket
+  const [jobProgress, setJobProgress] = useState<{ stage: string; progress: number } | null>(null)
+
+  const handleWsMessage = useCallback((msg: WsMessage) => {
+    if (msg.caseId !== caseId) return
+
+    if (msg.type === 'SEGMENTATION_PROGRESS') {
+      const m = msg as { stage: string; progress: number }
+      setJobProgress({ stage: m.stage, progress: m.progress })
+    } else if (msg.type === 'SEGMENTATION_COMPLETE' || msg.type === 'REDUCTION_COMPLETE') {
+      setJobProgress(null)
+      addToast({ type: 'success', message: msg.type === 'SEGMENTATION_COMPLETE' ? 'Segmentation complete' : 'Reduction plan ready' })
+      refetch()
+    } else if (msg.type === 'SEGMENTATION_FAILED' || msg.type === 'REDUCTION_FAILED' || msg.type === 'JOB_FAILED') {
+      setJobProgress(null)
+      const errMsg = (msg as { errorMessage?: string }).errorMessage ?? 'Job failed'
+      addToast({ type: 'error', message: errMsg })
+      refetch()
+    } else if (msg.type === 'CASE_STATUS_CHANGED') {
+      refetch()
+    }
+  }, [caseId, addToast, refetch])
+
+  useWebSocket({ onMessage: handleWsMessage })
 
   useEffect(() => {
     if (caseData) setActiveCase(caseData)
@@ -215,10 +374,17 @@ export default function CaseDetailPage() {
   }, [caseData, setActiveCase])
 
   if (isLoading) return <PageLoading label="Loading case..." />
-  if (error || !caseData) return <ErrorState description={`Case ${caseId} not found`} onRetry={() => navigate('/cases')} />
+  if (error || !caseData) return <CaseNotFound caseId={caseId} />
 
   return (
     <div className="flex flex-col h-full animate-fade-in" data-testid="case-detail-page">
+      {/* Job progress bar */}
+      {jobProgress && (
+        <div className="px-6 pt-3" data-testid="case-job-progress">
+          <JobProgressBar stage={jobProgress.stage} progress={jobProgress.progress} />
+        </div>
+      )}
+
       {/* Case header */}
       <div className="px-6 py-4 bg-slate-900 border-b border-slate-800">
         <div className="flex items-center gap-4">
@@ -237,6 +403,9 @@ export default function CaseDetailPage() {
             </div>
             <StatusBadge status={caseData.status} />
           </div>
+
+          {/* Status transition buttons */}
+          <StatusTransitions caseData={caseData} onTransition={() => refetch()} />
 
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <User size={12} />

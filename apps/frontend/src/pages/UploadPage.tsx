@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, FileText, ChevronRight, Check, AlertCircle, X, Plus } from 'lucide-react'
+import { Upload, FileText, ChevronRight, Check, AlertCircle, X, Plus, AlertTriangle } from 'lucide-react'
 import { studiesApi, casesApi } from '../lib/api'
 import { Spinner } from '../components/common/LoadingOverlay'
+import { useToastStore } from '../stores/toastStore'
 
 type Step = 1 | 2 | 3 | 4
 
@@ -22,11 +23,13 @@ interface DicomTag {
 
 export default function UploadPage() {
   const navigate = useNavigate()
+  const { addToast } = useToastStore()
   const [step, setStep] = useState<Step>(1)
   const [files, setFiles] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadCancelled, setUploadCancelled] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [studyId, setStudyId] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -37,6 +40,7 @@ export default function UploadPage() {
   const [createdCaseNumber, setCreatedCaseNumber] = useState<string | null>(null)
   const [createdCaseId, setCreatedCaseId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -55,12 +59,23 @@ export default function UploadPage() {
 
   const totalSizeMb = files.reduce((s, f) => s + f.size, 0) / (1024 * 1024)
 
+  const handleCancelUpload = () => {
+    abortRef.current?.abort()
+    setUploadCancelled(true)
+    setIsUploading(false)
+    setUploadProgress(0)
+    addToast({ type: 'info', message: 'Upload cancelled' })
+  }
+
   const handleUpload = async () => {
     if (files.length === 0) return
     setIsUploading(true)
     setUploadError(null)
+    setUploadCancelled(false)
+    abortRef.current = new AbortController()
     try {
       const result = await studiesApi.upload(files[0], setUploadProgress)
+      if (uploadCancelled) return
       setJobId(result.jobId)
       setStudyId(result.studyId)
 
@@ -79,7 +94,6 @@ export default function UploadPage() {
         })
         setDicomTags(tags)
       } catch {
-        // Metadata fetch is best-effort; proceed with empty tags
         setDicomTags([])
       } finally {
         setMetadataLoading(false)
@@ -87,7 +101,9 @@ export default function UploadPage() {
 
       setStep(2)
     } catch (err) {
-      setUploadError('Upload failed. Please check your connection and try again.')
+      if (!uploadCancelled) {
+        setUploadError('Upload failed. Please check your connection and try again.')
+      }
     } finally {
       setIsUploading(false)
     }
@@ -101,9 +117,10 @@ export default function UploadPage() {
       })
       setCreatedCaseNumber(newCase.caseNumber)
       setCreatedCaseId(newCase.id)
+      addToast({ type: 'success', message: `Case ${newCase.caseNumber} created successfully` })
       setStep(4)
-    } catch {
-      setStep(4)
+    } catch (err) {
+      addToast({ type: 'error', message: 'Failed to create case. Please try again.' })
     }
   }
 
@@ -201,12 +218,27 @@ export default function UploadPage() {
             </div>
           )}
 
+          {/* File size warning */}
+          {totalSizeMb > 500 && !isUploading && (
+            <div className="flex items-center gap-2 p-3 bg-amber-950/60 border border-amber-800 rounded-lg text-sm text-amber-400" data-testid="file-size-warning">
+              <AlertTriangle size={15} />
+              File is very large ({totalSizeMb.toFixed(0)} MB). Upload may take several minutes.
+            </div>
+          )}
+
           {/* Upload progress */}
           {isUploading && (
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4" data-testid="upload-progress">
               <div className="flex items-center gap-3 mb-2">
                 <Spinner size={16} />
-                <span className="text-sm text-slate-300">Uploading and validating DICOM data...</span>
+                <span className="flex-1 text-sm text-slate-300">Uploading and validating DICOM data...</span>
+                <button
+                  onClick={handleCancelUpload}
+                  className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors"
+                  data-testid="cancel-upload-btn"
+                >
+                  <X size={13} /> Cancel
+                </button>
               </div>
               <div className="h-2 bg-slate-700 rounded-full">
                 <div
