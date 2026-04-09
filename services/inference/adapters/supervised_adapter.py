@@ -84,42 +84,73 @@ class SupervisedReductionModel(InferenceModel):
             **kwargs:
                 spacing: (sz, sy, sx) voxel spacing in mm.
                 ios_tooth_meshes: Dict[int, np.ndarray] mapping FDI → (P, 3) points.
-                num_fragments: int, number of bone fragments.
+                fragments: List of fragment data dicts for the supervised model.
+                case_id: str, case identifier for confidence gate.
+                plan_id: str, plan identifier for confidence gate.
 
         Returns:
             Dict with:
             - "fragment_transforms": Per-fragment SE(3) predictions
-            - "tooth_transforms": Per-tooth SE(3) predictions
             - "occlusion_metrics": Clinical metric predictions
             - "confidence_level": Routing decision ("accept"/"review"/"fallback"/"reject")
             - "overall_confidence": Aggregate confidence [0, 1]
+            - "per_fragment_confidence": Per-fragment confidence scores
+            - "route_to_fallback": Whether to fall back to optimization
+            - "requires_surgeon_review": Whether surgeon review is needed
+            - "reject_reasons": Reasons if prediction was rejected
             - "inference_time_ms": Elapsed time
+            - "decision": Full ClinicalDecision object
+            - "plan": Raw ReductionPlan from the model
         """
         self._ensure_loaded()
 
-        spacing = kwargs.get("spacing")
-        ios_tooth_meshes = kwargs.get("ios_tooth_meshes")
-        num_fragments = kwargs.get("num_fragments", 2)
-
-        result = self._service.predict(
-            ct_volume=input_data,
-            ct_spacing=spacing,
-            ios_tooth_meshes=ios_tooth_meshes,
-            num_fragments=num_fragments,
+        from app.services.postprocessing.confidence_gate import (
+            ConfidenceGate,
+            DecisionType,
         )
 
+        spacing = kwargs.get("spacing")
+        ios_tooth_meshes = kwargs.get("ios_tooth_meshes")
+        fragments = kwargs.get("fragments", [])
+
+        plan = self._service.predict(
+            fragments=fragments,
+            ct_volume=input_data,
+            ct_spacing=spacing,
+            tooth_meshes=ios_tooth_meshes,
+        )
+
+        # Build confidence data for the gate
+        gate = ConfidenceGate()
+        fragment_data = [
+            {
+                "fragment_id": fid,
+                "confidence": conf,
+                "rotation_uncertainty_deg": 0.0,  # Not available from plan
+                "translation_uncertainty_mm": 0.0,
+            }
+            for fid, conf in plan.fragment_confidences.items()
+        ]
+        prediction_confidence = gate.build_prediction_confidence(
+            case_id=kwargs.get("case_id", ""),
+            plan_id=kwargs.get("plan_id", ""),
+            model_version=plan.model_version or "",
+            fragment_data=fragment_data,
+        )
+        decision = gate.evaluate(prediction_confidence)
+
         return {
-            "fragment_transforms": result.fragment_transforms,
-            "tooth_transforms": result.tooth_transforms,
-            "occlusion_metrics": result.occlusion_metrics,
-            "confidence_level": result.confidence_level,
-            "overall_confidence": result.overall_confidence,
-            "per_fragment_confidence": result.per_fragment_confidence,
-            "route_to_fallback": result.route_to_fallback,
-            "requires_surgeon_review": result.requires_surgeon_review,
-            "reject_reasons": result.reject_reasons,
-            "inference_time_ms": result.inference_time_ms,
-            "ios_available": result.ios_available,
+            "fragment_transforms": plan.fragment_transforms,
+            "occlusion_metrics": plan.occlusal_metrics,
+            "confidence_level": decision.decision.value,
+            "overall_confidence": plan.overall_confidence,
+            "per_fragment_confidence": plan.fragment_confidences,
+            "route_to_fallback": decision.decision == DecisionType.FALLBACK,
+            "requires_surgeon_review": decision.decision == DecisionType.REVIEW,
+            "reject_reasons": decision.reasons if decision.decision == DecisionType.REJECT else [],
+            "inference_time_ms": plan.generation_time_ms,
+            "decision": decision,
+            "plan": plan,
         }
 
     def get_info(self) -> ModelVersion:

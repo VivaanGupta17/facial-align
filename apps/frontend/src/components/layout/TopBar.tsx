@@ -1,8 +1,8 @@
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { ChevronRight, Cpu, AlertCircle, CheckCircle, RefreshCw, Bell, User, Settings, LogOut } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { dashboardApi } from '../../lib/api'
+import { dashboardApi, authApi } from '../../lib/api'
 import { useCaseStore } from '../../stores/caseStore'
 
 function GpuStatusPill({ utilizationPct }: { utilizationPct: number }) {
@@ -81,7 +81,14 @@ function CaseStatusBadge() {
 }
 
 export default function TopBar() {
+  const navigate = useNavigate()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const { data: currentUser } = useQuery({
+    queryKey: ['current-user'],
+    queryFn: authApi.me,
+    staleTime: 60_000,
+    retry: false,
+  })
   const { data: health } = useQuery({
     queryKey: ['system-health'],
     queryFn: dashboardApi.getSystemHealth,
@@ -147,11 +154,11 @@ export default function TopBar() {
             data-testid="user-menu-btn"
           >
             <div className="w-7 h-7 rounded-full bg-gradient-to-br from-cyan-600 to-cyan-800 flex items-center justify-center text-xs font-bold text-white shrink-0">
-              EC
+              {(currentUser?.full_name ?? 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
             </div>
             <div className="text-left hidden sm:block">
-              <p className="text-xs font-semibold text-slate-200">Dr. Emily Chen</p>
-              <p className="text-2xs text-slate-500">Oral & Maxillofacial</p>
+              <p className="text-xs font-semibold text-slate-200">{currentUser?.full_name ?? 'User'}</p>
+              <p className="text-2xs text-slate-500">{currentUser?.specialty ?? currentUser?.role ?? ''}</p>
             </div>
           </button>
 
@@ -161,8 +168,8 @@ export default function TopBar() {
               data-testid="user-menu"
             >
               <div className="px-4 py-2.5 border-b border-slate-700">
-                <p className="text-sm font-semibold text-slate-100">Dr. Emily Chen</p>
-                <p className="text-xs text-slate-400">emily.chen@hospital.org</p>
+                <p className="text-sm font-semibold text-slate-100">{currentUser?.full_name ?? 'User'}</p>
+                <p className="text-xs text-slate-400">{currentUser?.email ?? ''}</p>
               </div>
               <button className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 transition-colors">
                 <User size={14} /> Profile
@@ -171,7 +178,14 @@ export default function TopBar() {
                 <Settings size={14} /> Preferences
               </button>
               <div className="border-t border-slate-700 mt-1 pt-1">
-                <button className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-red-400 hover:bg-slate-700 transition-colors">
+                <button
+                  onClick={() => {
+                    localStorage.removeItem('auth_token')
+                    localStorage.removeItem('refresh_token')
+                    navigate('/login', { replace: true })
+                  }}
+                  className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-red-400 hover:bg-slate-700 transition-colors"
+                >
                   <LogOut size={14} /> Sign out
                 </button>
               </div>

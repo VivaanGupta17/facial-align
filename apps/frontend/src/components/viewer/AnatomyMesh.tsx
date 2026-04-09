@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useMemo } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
 import type { StructureLabel } from '../../types/medical'
 
@@ -17,17 +18,57 @@ interface AnatomyMeshProps {
   onHover?: (hovered: boolean) => void
   // Shape variant — maps anatomical structure to placeholder geometry
   shapeVariant?: 'mandible' | 'maxilla' | 'zygoma' | 'orbit' | 'teeth' | 'bone' | 'fragment'
+  /** URL to GLB mesh file — when provided, loads real mesh instead of placeholder */
+  meshUri?: string
+}
+
+/**
+ * Loads a real GLB mesh via useGLTF and applies material props.
+ * Rendered when meshUri is provided.
+ */
+function RealMesh({
+  meshUri,
+  displayColor,
+  opacity,
+  wireframe,
+  emissiveColor,
+  emissiveIntensity,
+}: {
+  meshUri: string
+  displayColor: THREE.Color
+  opacity: number
+  wireframe: boolean
+  emissiveColor: THREE.Color
+  emissiveIntensity: number
+}) {
+  const { scene } = useGLTF(meshUri)
+
+  const clonedScene = useMemo(() => {
+    const clone = scene.clone(true)
+    clone.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.material = new THREE.MeshStandardMaterial({
+          color: displayColor,
+          opacity,
+          transparent: opacity < 1,
+          wireframe,
+          emissive: emissiveColor,
+          emissiveIntensity,
+          side: THREE.DoubleSide,
+        })
+      }
+    })
+    return clone
+  }, [scene, displayColor, opacity, wireframe, emissiveColor, emissiveIntensity])
+
+  return <primitive object={clonedScene} />
 }
 
 /**
  * Individual anatomy mesh component.
  *
- * Currently renders placeholder geometry (BoxGeometry, etc.) to demonstrate
- * the viewer works. When real mesh loading is implemented:
- * 1. Use useGLTF() from @react-three/drei to load the GLB mesh
- * 2. Replace the placeholder mesh with <primitive object={gltf.scene} />
- * 3. Apply color via meshStandardMaterial with .color.set(color)
- * 4. Apply opacity via .material.opacity and .material.transparent
+ * When meshUri is provided, loads a real GLB mesh via useGLTF.
+ * Otherwise renders placeholder geometry as a fallback.
  */
 export default function AnatomyMesh({
   label,
@@ -41,6 +82,7 @@ export default function AnatomyMesh({
   onClick,
   onHover,
   shapeVariant = 'bone',
+  meshUri,
 }: AnatomyMeshProps) {
   const meshRef = useRef<THREE.Mesh>(null!)
   const [hovered, setHovered] = useState(false)
@@ -157,7 +199,18 @@ export default function AnatomyMesh({
       onPointerOut={() => { setHovered(false); onHover?.(false); document.body.style.cursor = 'auto' }}
       data-testid={`anatomy-mesh-${label}`}
     >
-      <PlaceholderGeometry />
+      {meshUri ? (
+        <RealMesh
+          meshUri={meshUri}
+          displayColor={displayColor}
+          opacity={opacity}
+          wireframe={wireframe}
+          emissiveColor={emissiveColor}
+          emissiveIntensity={emissiveIntensity}
+        />
+      ) : (
+        <PlaceholderGeometry />
+      )}
     </group>
   )
 }

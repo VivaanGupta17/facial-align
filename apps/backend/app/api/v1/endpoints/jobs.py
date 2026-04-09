@@ -402,7 +402,7 @@ async def get_job_logs(
     try:
         broker_url = settings.celery.broker_url
         base_url = broker_url.rsplit("/", 1)[0]
-        redis_client = sync_redis.from_url(f"{base_url}/2", decode_responses=True)
+        redis_client = sync_redis.from_url(f"{base_url}/4", decode_responses=True)  # DB 4 for job logs
 
         raw_logs = redis_client.lrange(log_key, offset, offset + limit - 1)
         redis_client.close()
@@ -570,7 +570,7 @@ async def list_jobs(
     job_ids: List[str] = []
 
     try:
-        redis_client = sync_redis.from_url(f"{base_url}/2", decode_responses=True)
+        redis_client = sync_redis.from_url(f"{base_url}/4", decode_responses=True)  # DB 4 for job logs
 
         # Determine which Redis key to query
         if case_id:

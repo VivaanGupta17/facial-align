@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
+import ToastContainer from '../common/Toast'
 
 export default function AppShell() {
   return (
@@ -18,6 +19,9 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* Toast notifications */}
+      <ToastContainer />
     </div>
   )
 }

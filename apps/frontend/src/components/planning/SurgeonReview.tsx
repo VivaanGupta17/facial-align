@@ -1,9 +1,12 @@
-import { useState } from 'react'
-import { Check, X, Clock, MessageSquare, Pen, AlertTriangle, GitCompare, CheckSquare, Square } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Check, X, Clock, MessageSquare, Pen, AlertTriangle, GitCompare, CheckSquare, Square, Trash2 } from 'lucide-react'
 import { useSurgeonReview, useApproveReview, useRequestRevision, usePlan } from '../../hooks/usePlanning'
+import { useSegmentationResult } from '../../hooks/useSegmentation'
+import { reviewApi } from '../../lib/api'
 import { PageLoading, ErrorState } from '../common/LoadingOverlay'
 import { MetricInline } from '../common/MetricCard'
 import { ConfidenceRing } from '../common/ConfidenceBar'
+import Viewer3D from '../viewer/Viewer3D'
 import type { ReviewChecklist as ReviewChecklistItem } from '../../types/medical'
 
 interface ChecklistSectionProps {
@@ -63,6 +66,135 @@ function ChecklistSection({ category, items, onToggle, disabled }: ChecklistSect
   )
 }
 
+// ---------------------------
+// Signature canvas component
+// ---------------------------
+function SignatureCanvas({
+  onSign,
+  disabled,
+}: {
+  onSign: (base64: string) => void
+  disabled: boolean
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [hasSignature, setHasSignature] = useState(false)
+
+  const getCtx = () => canvasRef.current?.getContext('2d')
+
+  const startDraw = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    if (disabled) return
+    const ctx = getCtx()
+    if (!ctx || !canvasRef.current) return
+
+    setIsDrawing(true)
+    const rect = canvasRef.current.getBoundingClientRect()
+    const point = 'touches' in e ? e.touches[0] : e
+    ctx.beginPath()
+    ctx.moveTo(point.clientX - rect.left, point.clientY - rect.top)
+  }, [disabled])
+
+  const draw = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDrawing || disabled) return
+    const ctx = getCtx()
+    if (!ctx || !canvasRef.current) return
+
+    const rect = canvasRef.current.getBoundingClientRect()
+    const point = 'touches' in e ? e.touches[0] : e
+    ctx.lineWidth = 2
+    ctx.lineCap = 'round'
+    ctx.strokeStyle = '#22d3ee'
+    ctx.lineTo(point.clientX - rect.left, point.clientY - rect.top)
+    ctx.stroke()
+    setHasSignature(true)
+  }, [isDrawing, disabled])
+
+  const endDraw = useCallback(() => {
+    setIsDrawing(false)
+    if (hasSignature && canvasRef.current) {
+      onSign(canvasRef.current.toDataURL('image/png'))
+    }
+  }, [hasSignature, onSign])
+
+  const clear = () => {
+    const ctx = getCtx()
+    if (ctx && canvasRef.current) {
+      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height)
+      setHasSignature(false)
+      onSign('')
+    }
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.fillStyle = '#0f172a'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    // Draw baseline
+    ctx.strokeStyle = '#334155'
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 4])
+    ctx.beginPath()
+    ctx.moveTo(10, canvas.height - 20)
+    ctx.lineTo(canvas.width - 10, canvas.height - 20)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }, [])
+
+  return (
+    <div className="border border-slate-700 rounded-lg overflow-hidden" data-testid="signature-canvas">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-800 border-b border-slate-700">
+        <span className="text-2xs text-slate-400 font-semibold uppercase tracking-wider">Digital Signature</span>
+        {hasSignature && (
+          <button onClick={clear} className="text-2xs text-slate-500 hover:text-red-400 flex items-center gap-1">
+            <Trash2 size={10} /> Clear
+          </button>
+        )}
+      </div>
+      <canvas
+        ref={canvasRef}
+        width={280}
+        height={100}
+        className="cursor-crosshair w-full"
+        onMouseDown={startDraw}
+        onMouseMove={draw}
+        onMouseUp={endDraw}
+        onMouseLeave={endDraw}
+        onTouchStart={startDraw}
+        onTouchMove={draw}
+        onTouchEnd={endDraw}
+      />
+    </div>
+  )
+}
+
+// ---------------------------
+// Comparison view
+// ---------------------------
+function ComparisonView({ caseId }: { caseId: string }) {
+  const { data: segResult } = useSegmentationResult(caseId)
+  const structures = segResult?.structures ?? []
+
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-3" data-testid="comparison-view">
+      <div>
+        <p className="text-2xs text-slate-500 font-semibold uppercase tracking-wider mb-1.5 text-center">Pre-Reduction</p>
+        <div className="h-48 rounded-md border border-slate-700 overflow-hidden">
+          <Viewer3D structures={structures} height="100%" />
+        </div>
+      </div>
+      <div>
+        <p className="text-2xs text-slate-500 font-semibold uppercase tracking-wider mb-1.5 text-center">Planned Position</p>
+        <div className="h-48 rounded-md border border-cyan-900/50 overflow-hidden">
+          <Viewer3D structures={structures} height="100%" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface SurgeonReviewProps {
   caseId: string
   planId?: string
@@ -72,6 +204,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
   const [notes, setNotes] = useState('')
   const [showComparison, setShowComparison] = useState(false)
   const [localChecklist, setLocalChecklist] = useState<ReviewChecklistItem[] | null>(null)
+  const [signature, setSignature] = useState('')
 
   const { data: review, isLoading: reviewLoading, error } = useSurgeonReview(caseId)
   const { data: plan } = usePlan(planId)
@@ -99,6 +232,10 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
 
   const handleRequestRevision = async () => {
     await requestRevision.mutateAsync({ reviewId: review.id, notes })
+  }
+
+  const handleReject = async () => {
+    await reviewApi.reject(review.id, notes)
   }
 
   const isDecided = review.decision !== 'pending'
@@ -142,7 +279,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
               />
             </div>
 
-            {/* Before/after toggle (placeholder) */}
+            {/* Before/after toggle */}
             <div className="mt-4 flex items-center gap-2">
               <button
                 onClick={() => setShowComparison(c => !c)}
@@ -154,11 +291,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
               </button>
             </div>
 
-            {showComparison && (
-              <div className="mt-3 p-4 bg-slate-900 border border-dashed border-slate-700 rounded-md text-center text-xs text-slate-500" data-testid="comparison-placeholder">
-                Side-by-side 3D comparison will display here — requires both pre-op and planned positions to be computed
-              </div>
-            )}
+            {showComparison && <ComparisonView caseId={caseId} />}
           </div>
         )}
 
@@ -295,12 +428,9 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
             />
           </div>
 
-          {/* Digital signature placeholder */}
+          {/* Digital signature */}
           {!isDecided && (
-            <div className="border border-dashed border-slate-700 rounded-lg p-3 text-center" data-testid="signature-placeholder">
-              <Pen size={16} className="text-slate-600 mx-auto mb-1" />
-              <p className="text-xs text-slate-500">Digital signature will be applied on approval</p>
-            </div>
+            <SignatureCanvas onSign={setSignature} disabled={isDecided} />
           )}
         </div>
 
@@ -309,7 +439,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
           <div className="p-4 border-t border-slate-800 space-y-2">
             <button
               onClick={handleApprove}
-              disabled={!allRequiredPassed || approveReview.isPending}
+              disabled={!allRequiredPassed || approveReview.isPending || !signature}
               className="w-full flex items-center justify-center gap-2 btn-success disabled:opacity-40"
               data-testid="approve-btn"
             >
@@ -326,6 +456,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
               Request Revision
             </button>
             <button
+              onClick={handleReject}
               className="w-full flex items-center justify-center gap-2 btn-ghost text-red-400 hover:bg-red-950/30 text-sm"
               data-testid="reject-btn"
             >
@@ -336,6 +467,11 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
             {!allRequiredPassed && (
               <p className="text-center text-2xs text-slate-500">
                 {requiredItems.filter(c => c.passed !== true).length} required items not confirmed
+              </p>
+            )}
+            {allRequiredPassed && !signature && (
+              <p className="text-center text-2xs text-slate-500">
+                Sign above to enable approval
               </p>
             )}
           </div>

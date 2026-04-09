@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -47,9 +47,17 @@ const navSections: Array<{ title: string; items: NavItem[] }> = [
 ]
 
 export default function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 1024)
   const { activeCase } = useCaseStore()
   const location = useLocation()
+
+  // Auto-collapse on narrow viewports
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)')
+    const handler = (e: MediaQueryListEvent) => setCollapsed(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
 
   return (
     <aside
@@ -127,7 +135,7 @@ export default function Sidebar() {
             <span className="text-2xs font-semibold uppercase tracking-wider text-cyan-500">Active Case</span>
           </div>
           <p className="text-sm font-mono font-semibold text-slate-100">{activeCase.caseNumber}</p>
-          <p className="text-xs text-slate-400 capitalize mt-0.5">{activeCase.type.replace(/_/g, ' ')}</p>
+          <p className="text-xs text-slate-400 capitalize mt-0.5">{activeCase.caseType.replace(/_/g, ' ')}</p>
         </div>
       )}
 

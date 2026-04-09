@@ -1,15 +1,11 @@
 import { Check, X, RefreshCw, AlertTriangle, Cpu, Clock, Zap } from 'lucide-react'
-import { useSegmentationResult, useApproveStructure, useRejectStructure } from '../../hooks/useSegmentation'
+import { useSegmentationResult, useApproveStructure, useRejectStructure, useRequestResegmentation } from '../../hooks/useSegmentation'
 import ConfidenceBar, { ConfidenceRing } from '../common/ConfidenceBar'
 import { PageLoading, ErrorState } from '../common/LoadingOverlay'
 import Viewer3D from '../viewer/Viewer3D'
 import { useViewerStore } from '../../stores/viewerStore'
+import { casesApi } from '../../lib/api'
 import type { SegmentedStructure } from '../../types/medical'
-
-function useRequestResegmentation(caseId: string) {
-  // Placeholder — real implementation in useSegmentation.ts when backend is ready
-  return { mutate: (_label: string) => console.log('Re-segment', caseId, _label), isPending: false }
-}
 
 interface StructureRowProps {
   structure: SegmentedStructure
@@ -143,6 +139,22 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
   const flaggedCount = segResult.structures.filter(s => s.status === 'flagged').length
   const allAccepted = acceptedCount === segResult.structures.length
 
+  const handleAcceptAll = async () => {
+    for (const s of segResult.structures) {
+      if (s.status !== 'accepted') {
+        approveStructure.mutate(s.label)
+      }
+    }
+  }
+
+  const handleProceedToPlanning = async () => {
+    try {
+      await casesApi.transitionStatus(caseId, 'planning')
+    } catch {
+      // Fallback: transition may already be done or mock mode
+    }
+  }
+
   return (
     <div className="flex h-full min-h-0 animate-fade-in" data-testid="segmentation-review">
       {/* Left: 3D viewer */}
@@ -229,7 +241,7 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
               onAccept={() => approveStructure.mutate(s.label)}
               onReject={() => rejectStructure.mutate(s.label)}
               onResegment={() => requestResegmentation.mutate(s.label)}
-              isProcessing={approveStructure.isPending || rejectStructure.isPending}
+              isProcessing={approveStructure.isPending || rejectStructure.isPending || requestResegmentation.isPending}
             />
           ))}
         </div>
@@ -238,6 +250,8 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
         <div className="p-4 border-t border-slate-800 space-y-2" data-testid="segmentation-actions">
           {!allAccepted && (
             <button
+              onClick={handleAcceptAll}
+              disabled={approveStructure.isPending}
               className="w-full flex items-center justify-center gap-2 btn-secondary text-xs"
               data-testid="accept-all-btn"
             >
@@ -245,6 +259,7 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
             </button>
           )}
           <button
+            onClick={handleProceedToPlanning}
             disabled={!allAccepted}
             className="w-full flex items-center justify-center gap-2 btn-primary disabled:opacity-40"
             data-testid="proceed-planning-btn"

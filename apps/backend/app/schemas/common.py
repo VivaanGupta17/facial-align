@@ -10,17 +10,23 @@ from datetime import datetime
 from typing import Any, Generic, List, Optional, TypeVar
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic.alias_generators import to_camel
 
 T = TypeVar("T")
 
 
 class BaseSchema(BaseModel):
-    """Base schema with common configuration."""
+    """Base schema with common configuration.
+
+    All response fields are serialized as camelCase via alias_generator.
+    Python code uses snake_case; JSON output uses camelCase.
+    """
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True,
         use_enum_values=True,
+        alias_generator=to_camel,
     )
 
 
@@ -149,6 +155,12 @@ class PaginatedResponse(BaseSchema, Generic[T]):
     page: int = Field(..., description="Current page number")
     page_size: int = Field(..., description="Items per page")
     pages: int = Field(..., description="Total number of pages")
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def has_more(self) -> bool:
+        """Whether more pages exist after the current one."""
+        return self.page < self.pages
 
     @classmethod
     def create(

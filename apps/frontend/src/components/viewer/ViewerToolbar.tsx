@@ -1,6 +1,6 @@
 import {
   Box, Layers, Ruler, MessageSquare, Camera, ZoomIn, PanelRight,
-  Grid3X3, Crosshair, RotateCcw,
+  Grid3X3, Crosshair, RotateCcw, Download,
 } from 'lucide-react'
 import { useViewerStore } from '../../stores/viewerStore'
 import type { ViewerState } from '../../types/medical'
@@ -40,9 +40,10 @@ const VIEW_MODES: Array<{ id: ViewerState['viewMode']; label: string }> = [
 interface ViewerToolbarProps {
   onScreenshot?: () => void
   onZoomFit?: () => void
+  onExport?: () => void
 }
 
-export default function ViewerToolbar({ onScreenshot, onZoomFit }: ViewerToolbarProps) {
+export default function ViewerToolbar({ onScreenshot, onZoomFit, onExport }: ViewerToolbarProps) {
   const { viewerState, setViewMode, setActiveTool, toggleStructuresPanel, toggleGrid } = useViewerStore()
   const { viewMode, activeTool, showStructuresPanel, showGrid } = viewerState
 
@@ -122,6 +123,7 @@ export default function ViewerToolbar({ onScreenshot, onZoomFit }: ViewerToolbar
       <div className="flex items-center gap-0.5">
         <ToolButton icon={<ZoomIn size={15} />} label="Zoom to Fit" onClick={() => onZoomFit?.()} testId="tool-zoom-fit" />
         <ToolButton icon={<Camera size={15} />} label="Screenshot" onClick={() => onScreenshot?.()} testId="tool-screenshot" />
+        <ToolButton icon={<Download size={15} />} label="Export STL" onClick={() => onExport?.()} testId="tool-export-stl" />
       </div>
 
       {/* Active tool indicator */}

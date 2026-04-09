@@ -56,6 +56,7 @@ from app.models import patient     # noqa: F401, E402
 from app.models import plan        # noqa: F401, E402
 from app.models import segmentation  # noqa: F401, E402
 from app.models import study       # noqa: F401, E402
+from app.models import user        # noqa: F401, E402
 
 # ── Alembic config object ─────────────────────────────────────────────────────
 # Provides access to the alembic.ini values.

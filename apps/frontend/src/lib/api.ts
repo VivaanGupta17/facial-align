@@ -1,16 +1,17 @@
 /**
  * Facial Align API Client
  * Typed API client for all backend endpoints.
- * Currently returns mock data — replace implementations when backend is ready.
+ * All functions make real HTTP calls to the FastAPI backend.
  */
 
 import type {
   SurgicalCase,
+  CaseListItem,
+  CaseStudyInfo,
   Study,
   SegmentationResult,
   ReductionPlan,
   DashboardStats,
-  RecentCaseRow,
   SystemHealth,
   SurgeonReview,
   PaginatedResponse,
@@ -18,45 +19,120 @@ import type {
   CaseType,
 } from '../types/medical'
 
-import {
-  MOCK_CASES,
-  MOCK_DASHBOARD_STATS,
-  MOCK_RECENT_CASES,
-  MOCK_SEGMENTATION_RESULT,
-  MOCK_REDUCTION_PLAN,
-  MOCK_SURGEON_REVIEW,
-  MOCK_SYSTEM_HEALTH,
-  MOCK_STUDIES,
-} from './mockData'
-
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
 
-// Simulated network delay for development
-const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+// ---------------------------
+// HTTP Client
+// ---------------------------
 
-// ---------------------------
-// HTTP Client (real backend)
-// ---------------------------
+interface FetchOptions extends Omit<RequestInit, 'body'> {
+  body?: unknown
+  params?: Record<string, string | number | boolean | string[] | undefined>
+}
 
 async function fetchApi<T>(
   path: string,
-  options: RequestInit = {}
+  options: FetchOptions = {}
 ): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const { body, params, ...init } = options
+
+  // Build query string
+  let url = `${BASE_URL}${path}`
+  if (params) {
+    const searchParams = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) {
+        if (Array.isArray(v)) {
+          v.forEach(item => searchParams.append(k, String(item)))
+        } else {
+          searchParams.set(k, String(v))
+        }
+      }
+    })
+    const qs = searchParams.toString()
+    if (qs) url += `?${qs}`
+  }
+
+  const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
-      ...options.headers,
+      ...(init.headers as Record<string, string> || {}),
     },
-    ...options,
+    ...init,
+    body: body ? JSON.stringify(body) : undefined,
   })
 
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Unknown error' }))
-    throw new Error(error.message ?? `HTTP ${res.status}`)
+  if (res.status === 401) {
+    localStorage.removeItem('auth_token')
+    localStorage.removeItem('refresh_token')
+    window.location.href = '/login'
+    throw new Error('Session expired')
   }
 
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail ?? error.message ?? `HTTP ${res.status}`)
+  }
+
+  // Handle 204 No Content
+  if (res.status === 204) return undefined as unknown as T
+
   return res.json() as Promise<T>
+}
+
+// ---------------------------
+// Auth types
+// ---------------------------
+
+export interface TokenResponse {
+  access_token: string
+  refresh_token: string
+  token_type: string
+  expires_in: number
+}
+
+export interface UserProfile {
+  id: string
+  email: string
+  full_name: string
+  role: string
+  institution: string | null
+  specialty: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface RegisterData {
+  email: string
+  password: string
+  full_name: string
+  role?: string
+  institution?: string
+  specialty?: string
+}
+
+// ---------------------------
+// Auth API
+// ---------------------------
+
+export const authApi = {
+  login: (email: string, password: string) =>
+    fetchApi<TokenResponse>('/auth/login', { method: 'POST', body: { email, password } }),
+
+  register: (data: RegisterData) =>
+    fetchApi<TokenResponse>('/auth/register', { method: 'POST', body: data }),
+
+  me: () => fetchApi<UserProfile>('/auth/me'),
+
+  updateMe: (data: { full_name?: string; institution?: string; specialty?: string }) =>
+    fetchApi<UserProfile>('/auth/me', { method: 'PUT', body: data }),
+
+  refresh: (refreshToken: string) =>
+    fetchApi<TokenResponse>('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    fetchApi<void>('/auth/change-password', { method: 'POST', body: { current_password: currentPassword, new_password: newPassword } }),
 }
 
 // ---------------------------
@@ -72,54 +148,54 @@ export interface CasesListParams {
   search?: string
   dateFrom?: string
   dateTo?: string
-  sortBy?: 'updatedAt' | 'createdAt' | 'scheduledDate' | 'caseNumber'
+  sortBy?: 'updatedAt' | 'createdAt' | 'caseNumber'
   sortOrder?: 'asc' | 'desc'
 }
 
 export const casesApi = {
   /** List all cases with optional filtering */
-  list: async (params: CasesListParams = {}): Promise<PaginatedResponse<SurgicalCase>> => {
-    await delay(400)
-    // Mock implementation — filter by status/type if provided
-    let items = [...MOCK_CASES]
-    if (params.status?.length) items = items.filter(c => params.status!.includes(c.status))
-    if (params.type?.length) items = items.filter(c => params.type!.includes(c.type))
-    if (params.search) {
-      const q = params.search.toLowerCase()
-      items = items.filter(c => c.caseNumber.toLowerCase().includes(q))
-    }
-    const page = params.page ?? 1
-    const pageSize = params.pageSize ?? 20
-    const start = (page - 1) * pageSize
-    return { items: items.slice(start, start + pageSize), total: items.length, page, pageSize, hasMore: start + pageSize < items.length }
+  list: async (params: CasesListParams = {}): Promise<PaginatedResponse<CaseListItem>> => {
+    return fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+      params: {
+        page: params.page,
+        page_size: params.pageSize,
+        status: params.status?.join(','),
+        case_type: params.type?.join(','),
+        surgeon_id: params.surgeonId,
+        search: params.search,
+        created_after: params.dateFrom,
+        created_before: params.dateTo,
+        sort_by: params.sortBy,
+        sort_order: params.sortOrder,
+      },
+    })
   },
 
   /** Get single case by ID */
-  get: async (caseId: string): Promise<SurgicalCase> => {
-    await delay(200)
-    const c = MOCK_CASES.find(x => x.id === caseId)
-    if (!c) throw new Error(`Case ${caseId} not found`)
-    return c
-  },
+  get: async (caseId: string): Promise<SurgicalCase> =>
+    fetchApi<SurgicalCase>(`/cases/${caseId}`),
 
   /** Create new case */
-  create: async (data: Partial<SurgicalCase>): Promise<SurgicalCase> => {
-    await delay(600)
-    return { ...MOCK_CASES[0], ...data, id: `case-${Date.now()}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
-  },
+  create: async (data: Partial<SurgicalCase>): Promise<SurgicalCase> =>
+    fetchApi<SurgicalCase>('/cases', { method: 'POST', body: data }),
 
   /** Update case */
-  update: async (caseId: string, data: Partial<SurgicalCase>): Promise<SurgicalCase> => {
-    await delay(300)
-    const c = MOCK_CASES.find(x => x.id === caseId)
-    if (!c) throw new Error(`Case ${caseId} not found`)
-    return { ...c, ...data, updatedAt: new Date().toISOString() }
-  },
+  update: async (caseId: string, data: Partial<SurgicalCase>): Promise<SurgicalCase> =>
+    fetchApi<SurgicalCase>(`/cases/${caseId}`, { method: 'PATCH', body: data }),
+
+  /** Transition case status */
+  transitionStatus: async (caseId: string, newStatus: string, notes?: string): Promise<void> =>
+    fetchApi(`/cases/${caseId}/status`, {
+      method: 'POST',
+      body: { new_status: newStatus, notes },
+    }),
 
   /** Get recent cases for dashboard */
-  getRecent: async (limit = 10): Promise<RecentCaseRow[]> => {
-    await delay(300)
-    return MOCK_RECENT_CASES.slice(0, limit)
+  getRecent: async (limit = 10): Promise<CaseListItem[]> => {
+    const resp = await fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+      params: { page_size: limit, sort_by: 'updatedAt', sort_order: 'desc' },
+    })
+    return resp.items
   },
 }
 
@@ -127,24 +203,48 @@ export const casesApi = {
 // Dashboard API
 // ---------------------------
 
-export const dashboardApi = {
-  getStats: async (): Promise<DashboardStats> => {
-    await delay(250)
-    return MOCK_DASHBOARD_STATS
-  },
+const ACTIVE_STATUSES: CaseStatus[] = [
+  'pending_upload', 'uploading', 'processing', 'segmentation_in_progress',
+  'segmentation_review', 'planning', 'review',
+]
+const PENDING_SEG_STATUSES: CaseStatus[] = [
+  'pending_upload', 'uploading', 'processing', 'segmentation_in_progress',
+]
+const REVIEW_STATUSES: CaseStatus[] = ['review', 'segmentation_review']
 
-  getSystemHealth: async (): Promise<SystemHealth> => {
-    await delay(150)
+export const dashboardApi = {
+  /** Compute dashboard statistics from real case data */
+  getStats: async (): Promise<DashboardStats> => {
+    const [allCases, reviewCases] = await Promise.all([
+      fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+        params: { page_size: 1 },
+      }),
+      fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+        params: { page_size: 1, status: REVIEW_STATUSES.join(',') },
+      }),
+    ])
+
+    const totalActive = allCases.total
+    const awaitingReview = reviewCases.total
+
+    // Estimate pending segmentation from total minus review/completed
+    const pendingSegmentation = Math.max(0, totalActive - awaitingReview)
+
     return {
-      ...MOCK_SYSTEM_HEALTH,
-      lastChecked: new Date().toISOString(),
-      // Simulate fluctuating GPU utilization
-      gpus: MOCK_SYSTEM_HEALTH.gpus.map(g => ({
-        ...g,
-        utilizationPercent: Math.max(0, Math.min(100, g.utilizationPercent + Math.round((Math.random() - 0.5) * 10))),
-      })),
+      activeCases: totalActive,
+      activeCasesDelta: 0,
+      pendingSegmentation,
+      pendingSegmentationDelta: 0,
+      awaitingReview,
+      awaitingReviewDelta: 0,
+      completedThisMonth: 0,
+      completedThisMonthDelta: 0,
     }
   },
+
+  /** Get system health */
+  getSystemHealth: async (): Promise<SystemHealth> =>
+    fetchApi<SystemHealth>('/health'),
 }
 
 // ---------------------------
@@ -152,60 +252,231 @@ export const dashboardApi = {
 // ---------------------------
 
 export const studiesApi = {
-  get: async (studyId: string): Promise<Study> => {
-    await delay(200)
-    const s = MOCK_STUDIES.find(x => x.id === studyId)
-    if (!s) throw new Error(`Study ${studyId} not found`)
-    return s
+  /** List all imaging studies (paginated) */
+  list: async (params: { page?: number; pageSize?: number; modality?: string } = {}): Promise<PaginatedResponse<Study>> =>
+    fetchApi<PaginatedResponse<Study>>('/dicom/studies', {
+      params: {
+        page: params.page,
+        page_size: params.pageSize,
+        modality: params.modality,
+      },
+    }),
+
+  /** Get study by ID */
+  get: async (studyId: string): Promise<Study> =>
+    fetchApi<Study>(`/dicom/studies/${studyId}`),
+
+  /** Upload DICOM file with progress tracking */
+  upload: async (
+    file: File,
+    onProgress?: (pct: number) => void
+  ): Promise<{ jobId: string; studyId: string }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${BASE_URL}/dicom/upload`)
+      xhr.setRequestHeader(
+        'Authorization',
+        `Bearer ${localStorage.getItem('auth_token') ?? ''}`
+      )
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          onProgress?.(Math.round((e.loaded / e.total) * 100))
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText))
+          } catch {
+            reject(new Error('Invalid server response'))
+          }
+        } else {
+          reject(new Error(`Upload failed: HTTP ${xhr.status}`))
+        }
+      })
+
+      xhr.addEventListener('error', () => reject(new Error('Upload failed: network error')))
+      xhr.addEventListener('abort', () => reject(new Error('Upload aborted')))
+      xhr.send(formData)
+    })
   },
 
-  upload: async (_file: File, _onProgress?: (pct: number) => void): Promise<{ jobId: string; studyId: string }> => {
-    // Simulate upload progress
-    for (let i = 0; i <= 100; i += 10) {
-      await delay(200)
-      _onProgress?.(i)
+  /** Get study metadata */
+  getMetadata: async (studyId: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/dicom/studies/${studyId}/metadata`),
+
+  /** Chunked upload for large files (>100 MB) */
+  uploadChunked: async (
+    file: File,
+    patientMrn: string,
+    opts?: {
+      onProgress?: (received: number, total: number, speedBps: number, etaSec: number) => void
+      signal?: AbortSignal
+      patientAge?: number
+      patientSex?: string
+      institutionCode?: string
+      caseType?: string
+    },
+  ): Promise<{ jobId: string; studyId: string }> => {
+    const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB — matches backend
+
+    // 1. Init session
+    const initForm = new FormData()
+    initForm.append('filename', file.name)
+    initForm.append('total_size', String(file.size))
+    initForm.append('patient_mrn', patientMrn)
+    if (opts?.patientAge != null) initForm.append('patient_age', String(opts.patientAge))
+    if (opts?.patientSex) initForm.append('patient_sex', opts.patientSex)
+    if (opts?.institutionCode) initForm.append('institution_code', opts.institutionCode)
+    if (opts?.caseType) initForm.append('case_type', opts.caseType)
+
+    const initRes = await fetch(`${BASE_URL}/dicom/upload/init`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}` },
+      body: initForm,
+      signal: opts?.signal,
+    })
+    if (!initRes.ok) throw new Error(`Init failed: HTTP ${initRes.status}`)
+    const { uploadId, chunkCount } = (await initRes.json()) as {
+      uploadId: string; chunkSize: number; chunkCount: number; totalSize: number
     }
-    return { jobId: `job-${Date.now()}`, studyId: `st-${Date.now()}` }
+
+    // 2. Upload chunks with retry
+    const MAX_RETRIES = 3
+    let startTime = Date.now()
+
+    for (let i = 0; i < chunkCount; i++) {
+      if (opts?.signal?.aborted) throw new Error('Upload aborted')
+
+      const start = i * CHUNK_SIZE
+      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const blob = file.slice(start, end)
+
+      let attempt = 0
+      let success = false
+      while (!success && attempt < MAX_RETRIES) {
+        try {
+          const chunkForm = new FormData()
+          chunkForm.append('chunk', blob, `chunk_${i}`)
+          const chunkRes = await fetch(`${BASE_URL}/dicom/upload/${uploadId}/chunk/${i}`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}` },
+            body: chunkForm,
+            signal: opts?.signal,
+          })
+          if (!chunkRes.ok) throw new Error(`Chunk ${i} failed: HTTP ${chunkRes.status}`)
+          success = true
+        } catch (err) {
+          attempt++
+          if (attempt >= MAX_RETRIES) throw err
+          await new Promise(r => setTimeout(r, 1000 * attempt))
+        }
+      }
+
+      // Progress callback
+      const elapsed = (Date.now() - startTime) / 1000
+      const bytesUploaded = end
+      const speedBps = elapsed > 0 ? bytesUploaded / elapsed : 0
+      const remaining = file.size - bytesUploaded
+      const etaSec = speedBps > 0 ? remaining / speedBps : 0
+      opts?.onProgress?.(i + 1, chunkCount, speedBps, etaSec)
+    }
+
+    // 3. Complete
+    const completeRes = await fetch(`${BASE_URL}/dicom/upload/${uploadId}/complete`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+        'Content-Type': 'application/json',
+      },
+      signal: opts?.signal,
+    })
+    if (!completeRes.ok) throw new Error(`Complete failed: HTTP ${completeRes.status}`)
+    const result = await completeRes.json()
+    return { jobId: result.ingestionJobId, studyId: result.studyId }
   },
 
-  getMetadata: async (_studyId: string): Promise<Study> => {
-    await delay(400)
-    return MOCK_STUDIES[0]
-  },
+  /** Get chunked upload status (for resume) */
+  getUploadStatus: async (uploadId: string) =>
+    fetchApi<{
+      uploadId: string
+      status: string
+      receivedChunks: number[]
+      chunkCount: number
+      chunkSize: number
+      totalSize: number
+      filename: string
+    }>(`/dicom/upload/${uploadId}/status`),
 }
+
+// ---------------------------
+// Case Studies API (multi-study per case)
+// ---------------------------
+
+export const caseStudiesApi = {
+  /** List all studies attached to a case */
+  list: async (caseId: string): Promise<CaseStudyInfo[]> =>
+    fetchApi<CaseStudyInfo[]>(`/cases/${caseId}/studies`),
+
+  /** Attach a study to a case */
+  attach: async (
+    caseId: string,
+    data: { studyId: string; studyRole?: string; studyLabel?: string; isPrimary?: boolean }
+  ): Promise<CaseStudyInfo> =>
+    fetchApi<CaseStudyInfo>(`/cases/${caseId}/studies`, { method: 'POST', body: data }),
+
+  /** Detach a study from a case */
+  detach: async (caseId: string, studyId: string): Promise<void> =>
+    fetchApi<void>(`/cases/${caseId}/studies/${studyId}`, { method: 'DELETE' }),
+
+  /** Update role/label/primary for a case-study link */
+  update: async (
+    caseId: string,
+    studyId: string,
+    data: { studyRole?: string; studyLabel?: string; isPrimary?: boolean }
+  ): Promise<CaseStudyInfo> =>
+    fetchApi<CaseStudyInfo>(`/cases/${caseId}/studies/${studyId}`, { method: 'PATCH', body: data }),
 
 // ---------------------------
 // Segmentation API
 // ---------------------------
 
 export const segmentationApi = {
+  /** Get the latest segmentation result for a case */
   getResult: async (caseId: string): Promise<SegmentationResult> => {
-    await delay(300)
-    return { ...MOCK_SEGMENTATION_RESULT, caseId }
+    const results = await fetchApi<SegmentationResult[]>(`/segmentation/cases/${caseId}`)
+    if (results.length > 0) return results[results.length - 1]
+    throw new Error('No segmentation results found')
   },
 
-  submitJob: async (caseId: string): Promise<{ jobId: string }> => {
-    await delay(500)
-    return { jobId: `job-${Date.now()}` }
-  },
+  /** Submit a new segmentation job */
+  submitJob: async (
+    caseId: string
+  ): Promise<{ jobId: string; segmentationId: string }> =>
+    fetchApi('/segmentation', { method: 'POST', body: { caseId } }),
 
-  getJobStatus: async (jobId: string): Promise<{ status: 'queued' | 'running' | 'completed' | 'failed'; progress: number }> => {
-    await delay(100)
-    return { status: 'running', progress: Math.random() * 100 }
-  },
+  /** Get job status by ID */
+  getJobStatus: async (
+    jobId: string
+  ): Promise<{ status: string; progress: number; currentStep?: string }> =>
+    fetchApi(`/jobs/${jobId}`),
 
-  approveStructure: async (_caseId: string, _label: string): Promise<void> => {
-    await delay(200)
-  },
+  /** Approve a segmentation structure */
+  approveStructure: async (caseId: string, label: string): Promise<void> =>
+    fetchApi(`/segmentation/${caseId}/structures/${label}/approve`, { method: 'POST' }),
 
-  rejectStructure: async (_caseId: string, _label: string): Promise<void> => {
-    await delay(200)
-  },
+  /** Reject a segmentation structure */
+  rejectStructure: async (caseId: string, label: string): Promise<void> =>
+    fetchApi(`/segmentation/${caseId}/structures/${label}/reject`, { method: 'POST' }),
 
-  requestResegmentation: async (_caseId: string, _label: string): Promise<{ jobId: string }> => {
-    await delay(300)
-    return { jobId: `job-${Date.now()}` }
-  },
+  /** Request re-segmentation for a specific structure */
+  requestResegmentation: async (caseId: string, label: string): Promise<{ jobId: string }> =>
+    fetchApi(`/segmentation/${caseId}/structures/${label}/resegment`, { method: 'POST' }),
 }
 
 // ---------------------------
@@ -213,38 +484,131 @@ export const segmentationApi = {
 // ---------------------------
 
 export const planningApi = {
-  getPlan: async (planId: string): Promise<ReductionPlan> => {
-    await delay(250)
-    return { ...MOCK_REDUCTION_PLAN, id: planId }
-  },
+  /** Get a reduction plan by ID */
+  getPlan: async (planId: string): Promise<ReductionPlan> =>
+    fetchApi<ReductionPlan>(`/planning/${planId}`),
 
-  generatePlan: async (caseId: string): Promise<ReductionPlan> => {
-    await delay(2000) // Simulate AI planning time
-    return { ...MOCK_REDUCTION_PLAN, caseId, version: MOCK_REDUCTION_PLAN.version + 1, createdAt: new Date().toISOString() }
-  },
+  /** Generate a new reduction plan */
+  generatePlan: async (
+    caseId: string
+  ): Promise<{ jobId: string; planId: string }> =>
+    fetchApi('/planning', { method: 'POST', body: { caseId } }),
 
+  /** Update fragment transform (surgeon manual edit) */
   updateFragmentTransform: async (
-    _planId: string,
-    _fragmentId: string,
-    _transform: unknown
-  ): Promise<ReductionPlan> => {
-    await delay(150)
-    return MOCK_REDUCTION_PLAN
-  },
+    planId: string,
+    fragmentId: string,
+    transform: unknown
+  ): Promise<ReductionPlan> =>
+    fetchApi<ReductionPlan>(`/planning/${planId}/surgeon-edit`, {
+      method: 'POST',
+      body: { fragmentId, transform, editType: 'manual_adjustment' },
+    }),
 
-  acceptAiSuggestion: async (_planId: string, _fragmentId: string): Promise<ReductionPlan> => {
-    await delay(200)
-    return MOCK_REDUCTION_PLAN
-  },
+  /** Accept AI-suggested transform for a fragment */
+  acceptAiSuggestion: async (
+    planId: string,
+    fragmentId: string
+  ): Promise<ReductionPlan> =>
+    fetchApi<ReductionPlan>(`/planning/${planId}/surgeon-edit`, {
+      method: 'POST',
+      body: { fragmentId, editType: 'accept_ai_suggestion' },
+    }),
 
-  resetFragment: async (_planId: string, _fragmentId: string): Promise<ReductionPlan> => {
-    await delay(200)
-    return MOCK_REDUCTION_PLAN
-  },
+  /** Reset a fragment to its base transform */
+  resetFragment: async (
+    planId: string,
+    fragmentId: string
+  ): Promise<ReductionPlan> =>
+    fetchApi<ReductionPlan>(`/planning/${planId}/surgeon-edit`, {
+      method: 'POST',
+      body: { fragmentId, editType: 'reset_to_base' },
+    }),
 
-  listVersions: async (caseId: string): Promise<ReductionPlan[]> => {
-    await delay(300)
-    return [1, 2, 3].map(v => ({ ...MOCK_REDUCTION_PLAN, caseId, id: `plan-${v}`, version: v, name: `Plan v${v}` }))
+  /** List all plan versions for a case */
+  listVersions: async (caseId: string): Promise<ReductionPlan[]> =>
+    fetchApi<ReductionPlan[]>(`/planning/cases/${caseId}`),
+
+  /** Override an occlusal metric and re-optimize */
+  overrideMetric: async (
+    planId: string,
+    metricName: string,
+    targetValue: number,
+    notes?: string
+  ): Promise<ReductionPlan> =>
+    fetchApi<ReductionPlan>(`/planning/${planId}/metric-override`, {
+      method: 'POST',
+      body: { metric_name: metricName, target_value: targetValue, notes },
+    }),
+
+  /** Export splint design as STL blob */
+  exportSplint: async (planId: string, exportType: string): Promise<Blob> =>
+    fetch(`${BASE_URL}/planning/${planId}/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+      },
+      body: JSON.stringify({ export_type: exportType }),
+    }).then(res => {
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+      return res.blob()
+    }),
+}
+
+// ---------------------------
+// Export API
+// ---------------------------
+
+export interface ExportFileInfo {
+  filename: string
+  exportType: string
+  downloadUrl: string
+  vertexCount: number
+  faceCount: number
+  volumeMm3: number
+  isWatertight: boolean
+  isPrintable: boolean
+}
+
+export interface ExportResponse {
+  planId: string
+  caseId: string
+  files: ExportFileInfo[]
+  totalExportTimeSeconds: number
+}
+
+export const exportApi = {
+  /** Trigger STL export for a plan */
+  exportPlan: async (
+    planId: string,
+    exportType = 'full_assembly',
+    stlFormat = 'binary',
+    structureName?: string,
+  ): Promise<ExportResponse> =>
+    fetchApi<ExportResponse>(`/planning/${planId}/export`, {
+      method: 'POST',
+      body: { exportType, stlFormat, structureName },
+    }),
+
+  /** Download an exported STL file via authenticated fetch + blob */
+  downloadStl: async (planId: string, filename: string): Promise<void> => {
+    const url = `${BASE_URL}/planning/${planId}/export/${filename}`
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+      },
+    })
+    if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`)
+    const blob = await res.blob()
+    const objUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(objUrl)
   },
 }
 
@@ -253,28 +617,42 @@ export const planningApi = {
 // ---------------------------
 
 export const reviewApi = {
-  getReview: async (caseId: string): Promise<SurgeonReview> => {
-    await delay(250)
-    return { ...MOCK_SURGEON_REVIEW, caseId }
-  },
+  /** Get surgeon review for a case */
+  getReview: async (caseId: string): Promise<SurgeonReview> =>
+    fetchApi<SurgeonReview>(`/reviews/${caseId}`),
 
-  updateChecklist: async (_reviewId: string, _checklistId: string, _passed: boolean): Promise<SurgeonReview> => {
-    await delay(200)
-    return MOCK_SURGEON_REVIEW
-  },
+  /** Update a checklist item */
+  updateChecklist: async (
+    reviewId: string,
+    checklistId: string,
+    passed: boolean
+  ): Promise<SurgeonReview> =>
+    fetchApi<SurgeonReview>(`/reviews/${reviewId}/checklist`, {
+      method: 'PATCH',
+      body: { checklistId, passed },
+    }),
 
-  approve: async (_reviewId: string, _notes: string): Promise<SurgeonReview> => {
-    await delay(500)
-    return { ...MOCK_SURGEON_REVIEW, decision: 'approved', signedAt: new Date().toISOString() }
-  },
+  /** Approve a review */
+  approve: async (reviewId: string, notes: string): Promise<SurgeonReview> =>
+    fetchApi<SurgeonReview>(`/reviews/${reviewId}/approve`, {
+      method: 'POST',
+      body: { notes },
+    }),
 
-  requestRevision: async (_reviewId: string, _notes: string): Promise<SurgeonReview> => {
-    await delay(400)
-    return { ...MOCK_SURGEON_REVIEW, decision: 'revision_requested' }
-  },
+  /** Request revision */
+  requestRevision: async (
+    reviewId: string,
+    notes: string
+  ): Promise<SurgeonReview> =>
+    fetchApi<SurgeonReview>(`/reviews/${reviewId}/revision`, {
+      method: 'POST',
+      body: { notes },
+    }),
 
-  reject: async (_reviewId: string, _notes: string): Promise<SurgeonReview> => {
-    await delay(400)
-    return { ...MOCK_SURGEON_REVIEW, decision: 'rejected' }
-  },
+  /** Reject a review */
+  reject: async (reviewId: string, notes: string): Promise<SurgeonReview> =>
+    fetchApi<SurgeonReview>(`/reviews/${reviewId}/reject`, {
+      method: 'POST',
+      body: { notes },
+    }),
 }

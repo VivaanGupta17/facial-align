@@ -216,11 +216,11 @@ class PongMessage(WSBaseMessage):
 def _get_redis() -> aioredis.Redis:
     """Return a new Redis client using the Celery broker URL as the base."""
     # Extract host/port from Celery broker URL.
-    # e.g. redis://localhost:6379/0  → use DB 2 for WebSocket pub/sub
+    # e.g. redis://localhost:6379/0  → use DB 3 for WebSocket pub/sub
     broker_url = settings.celery.broker_url
-    # Replace the DB path segment with DB index 2 (reserved for WS pub/sub)
+    # Replace the DB path segment with DB index 3 (reserved for WS pub/sub)
     base_url = broker_url.rsplit("/", 1)[0]
-    ws_url = f"{base_url}/2"
+    ws_url = f"{base_url}/3"
     return aioredis.from_url(ws_url, decode_responses=True)
 
 

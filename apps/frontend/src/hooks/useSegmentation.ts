@@ -50,3 +50,11 @@ export function useRejectStructure(caseId: string) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: segmentationKeys.result(caseId) }) },
   })
 }
+
+export function useRequestResegmentation(caseId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (label: string) => segmentationApi.requestResegmentation(caseId, label),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: segmentationKeys.result(caseId) }) },
+  })
+}
