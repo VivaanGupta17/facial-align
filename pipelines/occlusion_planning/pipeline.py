@@ -1,5 +1,7 @@
 """
-Occlusion planning pipeline: dental arch loading → metric computation → splint spec.
+Occlusion planning pipeline: dental arch loading → ML metric computation → splint spec.
+
+Uses the ML-native OcclusionService with DGCNN encoder + cross-attention transformer.
 """
 
 from __future__ import annotations
@@ -17,13 +19,13 @@ logger = get_logger(__name__)
 
 class OcclusionPlanningPipeline:
     """
-    Occlusion analysis pipeline for a surgical reduction plan.
+    ML-native occlusion analysis pipeline for a surgical reduction plan.
 
     Stages:
     10% - Load reduction plan from database
     20% - Load dental arch meshes
     35% - Apply planned fragment transforms to dental arches
-    55% - Compute occlusal metrics
+    55% - Compute occlusal metrics (ML model: DGCNN + transformer)
     70% - Evaluate constraint satisfaction
     80% - Generate splint design specification
     90% - Update plan with occlusal metrics
@@ -42,15 +44,15 @@ class OcclusionPlanningPipeline:
         self._service = OcclusionService()
 
     async def run(self) -> Dict[str, Any]:
-        """Execute the occlusion planning pipeline."""
+        """Execute the ML-native occlusion planning pipeline."""
         from app.db.database import get_db_context
         from app.models.plan import ReductionPlan
         from app.models.segmentation import SegmentationResult
         from sqlalchemy import select, update
 
-        logger.info("occlusion_pipeline_started", plan_id=self._plan_id)
+        logger.info("occlusion_ml_pipeline_started", plan_id=self._plan_id)
 
-        with TimedOperation(logger, "occlusion_pipeline", plan_id=self._plan_id):
+        with TimedOperation(logger, "occlusion_ml_pipeline", plan_id=self._plan_id):
             # ── Load plan ──
             self._progress(10, "Loading reduction plan")
             async with get_db_context() as db:
@@ -70,7 +72,7 @@ class OcclusionPlanningPipeline:
             if upper_arch is None or lower_arch is None:
                 logger.warning(
                     "dental_arches_unavailable",
-                    note="Skipping occlusal metric computation",
+                    note="Skipping ML occlusal metric computation",
                 )
                 return {
                     "plan_id": self._plan_id,
@@ -93,8 +95,8 @@ class OcclusionPlanningPipeline:
                         T_4x4[:3, 3] = translation
                         transforms[frag_id] = T_4x4
 
-            # ── Compute occlusal metrics ──
-            self._progress(55, "Computing occlusal metrics")
+            # ── Compute occlusal metrics (ML) ──
+            self._progress(55, "Computing occlusal metrics via ML model")
             try:
                 metrics = await self._service.evaluate_occlusion(
                     upper_arch=upper_arch,
@@ -103,14 +105,14 @@ class OcclusionPlanningPipeline:
                 )
 
                 logger.info(
-                    "occlusal_metrics_computed",
+                    "ml_occlusal_metrics_computed",
                     overjet=metrics.overjet_mm,
                     overbite=metrics.overbite_mm,
                     molar_relationship=metrics.molar_relationship,
                     constraints_satisfied=metrics.constraints_satisfied,
                 )
             except Exception as exc:
-                logger.error("occlusal_metric_computation_failed", error=str(exc))
+                logger.error("ml_occlusal_metric_computation_failed", error=str(exc))
                 metrics = None
 
             # ── Generate splint spec ──
@@ -127,7 +129,7 @@ class OcclusionPlanningPipeline:
                     logger.warning("splint_design_failed", error=str(exc))
 
             # ── Update database ──
-            self._progress(90, "Updating plan with occlusal metrics")
+            self._progress(90, "Updating plan with ML occlusal metrics")
             if metrics:
                 async with get_db_context() as db:
                     await db.execute(
@@ -141,7 +143,7 @@ class OcclusionPlanningPipeline:
             self._progress(100, "Occlusion planning complete")
 
             logger.info(
-                "occlusion_pipeline_complete",
+                "occlusion_ml_pipeline_complete",
                 plan_id=self._plan_id,
                 constraints_satisfied=metrics.constraints_satisfied if metrics else None,
                 violations=len(metrics.constraint_violations) if metrics else 0,
@@ -166,7 +168,6 @@ class OcclusionPlanningPipeline:
 
         try:
             async with get_db_context() as db:
-                # Get case_id from plan
                 plan = (
                     await db.execute(
                         select(ReductionPlan).where(ReductionPlan.id == self._plan_id)
@@ -175,7 +176,6 @@ class OcclusionPlanningPipeline:
                 if not plan:
                     return None, None
 
-                # Get latest complete segmentation for this case
                 seg = (
                     await db.execute(
                         select(SegmentationResult)

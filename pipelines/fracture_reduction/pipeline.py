@@ -1,5 +1,10 @@
 """
-Fracture reduction pipeline: fragment geometry → ML prediction → constraint optimization → plan.
+Occlusion-first fracture reduction pipeline.
+
+Uses the occlusion-first FractureReductionService:
+Phase 1: Dental-landmark ICP positioning
+Phase 2: Joint optimization (occlusion + fracture via Adam)
+Phase 3: Validation + scoring
 """
 
 from __future__ import annotations
@@ -24,15 +29,15 @@ logger = get_logger(__name__)
 
 class FractureReductionPipeline:
     """
-    End-to-end fracture reduction planning pipeline.
+    Occlusion-first fracture reduction planning pipeline.
 
     Stages:
     5%  - Load segmentation data and fragment meshes
     20% - Load or generate intact reference anatomy
     30% - Load dental arch meshes (if available)
-    40% - Run reduction model (ML or ICP baseline)
-    65% - Apply occlusal + skeletal constraints
-    75% - Compute occlusal metrics
+    40% - Phase 1: Dental-landmark ICP positioning
+    55% - Phase 2: Joint occlusion+fracture optimization
+    70% - Phase 3: Collision detection + scoring
     80% - Validate plan
     90% - Save plan to database
     100% - Complete
@@ -43,7 +48,7 @@ class FractureReductionPipeline:
         plan_id: str,
         case_id: str,
         segmentation_id: str,
-        model_name: str = "baseline_icp",
+        model_name: str = "occlusion_first",
         dental_constraints: Optional[Dict[str, Any]] = None,
         use_intact_reference: bool = True,
         user_id: Optional[str] = None,
@@ -59,11 +64,11 @@ class FractureReductionPipeline:
         self._progress = progress_callback or (lambda pct, step: None)
 
     async def run(self) -> Dict[str, Any]:
-        """Execute the fracture reduction planning pipeline."""
+        """Execute the occlusion-first fracture reduction pipeline."""
         from app.schemas.plan import OcclusalConstraints
 
         logger.info(
-            "reduction_pipeline_started",
+            "occlusion_first_reduction_pipeline_started",
             plan_id=self._plan_id,
             model=self._model_name,
         )
@@ -100,8 +105,8 @@ class FractureReductionPipeline:
                 except Exception as exc:
                     logger.warning("invalid_dental_constraints", error=str(exc))
 
-            # ── Run reduction ──
-            self._progress(40, f"Running {self._model_name} reduction model")
+            # ── Run occlusion-first reduction ──
+            self._progress(40, "Running occlusion-first reduction (landmark ICP + joint optimizer)")
             service = FractureReductionService()
             plan = await service.suggest_reduction(
                 fragments=fragments,
@@ -118,10 +123,10 @@ class FractureReductionPipeline:
             duration_ms = int((end - start).total_seconds() * 1000)
             await self._save_plan(plan, duration_ms)
 
-            self._progress(100, "Reduction planning complete")
+            self._progress(100, "Occlusion-first reduction planning complete")
 
             logger.info(
-                "reduction_pipeline_complete",
+                "occlusion_first_reduction_pipeline_complete",
                 plan_id=self._plan_id,
                 confidence=round(plan.overall_confidence, 3),
                 symmetry=round(plan.symmetry_score, 3),
@@ -163,7 +168,6 @@ class FractureReductionPipeline:
             struct_paths = mesh_paths.get(structure_name, {})
             ply_path = struct_paths.get("ply") if isinstance(struct_paths, dict) else None
 
-            # Load mesh as point cloud
             points = await self._load_mesh_points(ply_path)
             if points is None or len(points) < 10:
                 logger.warning("skipping_empty_structure", structure=structure_name)
@@ -177,7 +181,6 @@ class FractureReductionPipeline:
             ])
             volume_mm3 = stats.get("volume_mm3", 0.0)
 
-            # Determine if this is a reference fragment (largest single structure)
             is_reference = structure_name in ["skull_base", "frontal_bone"]
 
             fragments.append(FragmentMesh(
@@ -190,7 +193,6 @@ class FractureReductionPipeline:
                 is_reference=is_reference,
             ))
 
-        # Sort by volume (largest first as reference)
         fragments.sort(key=lambda f: f.volume_mm3, reverse=True)
         if fragments and not any(f.is_reference for f in fragments):
             fragments[0].is_reference = True
@@ -213,38 +215,24 @@ class FractureReductionPipeline:
     async def _load_or_generate_reference(
         self, fragments: List[FragmentMesh]
     ) -> Optional[Any]:
-        """
-        Load or generate the intact reference anatomy.
-
-        Strategy:
-        1. Check if pre-injury CT is available (stored in case)
-        2. Mirror the intact contralateral side (for unilateral fractures)
-        3. Use statistical atlas (TODO: implement atlas)
-        4. Fall back to None (ICP uses centroid-based alignment)
-        """
+        """Load or generate intact reference anatomy."""
         logger.info(
             "generating_reference_anatomy",
             strategy="contralateral_mirror",
         )
 
-        # Strategy: Mirror the reference fragment to create a synthetic intact side
         ref_fragments = [f for f in fragments if f.is_reference]
         if not ref_fragments:
             return None
 
         try:
-            # Create mirrored reference using the non-fractured (reference) fragments
             import trimesh
             all_points = np.vstack([f.points for f in ref_fragments])
 
-            # Create mirror about the sagittal plane (x=0)
             mirrored_points = all_points.copy()
-            mirrored_points[:, 0] *= -1  # Mirror x-axis
+            mirrored_points[:, 0] *= -1
 
-            # Combine original + mirrored for complete reference
             combined = np.vstack([all_points, mirrored_points])
-
-            # Create a mesh from point cloud (convex hull as rough reference)
             pcd = trimesh.PointCloud(combined)
             return pcd
 
@@ -270,14 +258,10 @@ class FractureReductionPipeline:
                 return None, None
 
             import trimesh
-            # Load upper arch (aggregate of upper teeth)
-            upper_arch = None
-            lower_arch = None
-
-            dental_paths = seg.dental_mesh_paths or {}
             upper_meshes = []
             lower_meshes = []
 
+            dental_paths = seg.dental_mesh_paths or {}
             for fdi_str, paths in dental_paths.items():
                 fdi = int(fdi_str)
                 glb_path = paths.get("glb") if isinstance(paths, dict) else None
@@ -291,10 +275,8 @@ class FractureReductionPipeline:
                     except Exception:
                         pass
 
-            if upper_meshes:
-                upper_arch = trimesh.util.concatenate(upper_meshes)
-            if lower_meshes:
-                lower_arch = trimesh.util.concatenate(lower_meshes)
+            upper_arch = trimesh.util.concatenate(upper_meshes) if upper_meshes else None
+            lower_arch = trimesh.util.concatenate(lower_meshes) if lower_meshes else None
 
             return upper_arch, lower_arch
 
@@ -308,7 +290,6 @@ class FractureReductionPipeline:
         from app.models.plan import ReductionPlan
         from sqlalchemy import update
 
-        # Convert numpy transforms to lists for JSON storage
         transformations = {}
         for frag_id, transform_4x4 in plan.fragment_transforms.items():
             R = transform_4x4[:3, :3].tolist()
