@@ -3,20 +3,24 @@
 Seed the database with realistic demo data for development and demos.
 
 Creates:
-- 5 sample patients (de-identified)
-- 5 cases spanning different fracture patterns
+- 8 sample patients (de-identified)
+- 8 cases spanning different fracture patterns and statuses
 - CT study metadata for each case
-- Sample segmentation results
+- Sample segmentation results with mock confidence scores
 - Sample reduction plans at various stages
 
 Usage:
-    python scripts/seed_demo_data.py
-    python scripts/seed_demo_data.py --clear   # Clear existing demo data first
+    python scripts/seed_demo_data.py                # Write JSON to examples/
+    python scripts/seed_demo_data.py --db            # Write directly to database
+    python scripts/seed_demo_data.py --clear         # Clear existing demo data
+    python scripts/seed_demo_data.py -o out.json     # Write to custom JSON file
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import hashlib
 import json
 import sys
 import uuid
@@ -25,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 # Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
@@ -66,14 +71,37 @@ DEMO_PATIENTS = [
         "sex": "M",
         "notes": "Industrial accident. Panfacial fractures — frontal, bilateral ZMC, mandible.",
     },
+    {
+        "patient_id": "DEMO-PT-006",
+        "pseudonym": "Demo Patient Zeta",
+        "age_at_scan": 41,
+        "sex": "F",
+        "notes": "Bicycle accident. Unilateral mandible angle fracture.",
+    },
+    {
+        "patient_id": "DEMO-PT-007",
+        "pseudonym": "Demo Patient Eta",
+        "age_at_scan": 55,
+        "sex": "M",
+        "notes": "Fall. Le Fort I fracture with palatal split.",
+    },
+    {
+        "patient_id": "DEMO-PT-008",
+        "pseudonym": "Demo Patient Theta",
+        "age_at_scan": 23,
+        "sex": "F",
+        "notes": "Sports collision. Isolated nasal bone fracture with septal deviation.",
+    },
 ]
 
+# DB statuses match surgical_cases.status enum:
+#   CREATED, DICOM_PROCESSING, SEGMENTED, PLANNING, PLANNED, REVIEWED, APPROVED, ARCHIVED, FAILED
 DEMO_CASES = [
     {
-        "case_type": "bilateral_mandible",
+        "case_type": "TRAUMA",
         "fracture_classification": "AO CMF: 91-B3.1 (bilateral mandible body)",
-        "status": "plan_approved",
-        "surgeon": "Dr. Smith",
+        "status": "APPROVED",
+        "surgeon": "demo-surgeon-001",
         "fragments": [
             {"id": "mandible_body_L", "structure": "mandible", "volume_mm3": 4500},
             {"id": "mandible_body_R", "structure": "mandible", "volume_mm3": 4200},
@@ -82,10 +110,10 @@ DEMO_CASES = [
         "ct_quality_grade": "A",
     },
     {
-        "case_type": "le_fort_ii",
+        "case_type": "TRAUMA",
         "fracture_classification": "AO CMF: 92-C2 (Le Fort II with NOE)",
-        "status": "planning",
-        "surgeon": "Dr. Smith",
+        "status": "PLANNING",
+        "surgeon": "demo-surgeon-001",
         "fragments": [
             {"id": "maxilla_central", "structure": "maxilla", "volume_mm3": 6200},
             {"id": "nasal_complex", "structure": "nasal", "volume_mm3": 1800},
@@ -95,10 +123,10 @@ DEMO_CASES = [
         "ct_quality_grade": "A",
     },
     {
-        "case_type": "subcondylar",
+        "case_type": "TRAUMA",
         "fracture_classification": "AO CMF: 91-A1.3 (right subcondylar)",
-        "status": "segmentation_complete",
-        "surgeon": "Dr. Johnson",
+        "status": "SEGMENTED",
+        "surgeon": "demo-surgeon-002",
         "fragments": [
             {"id": "condyle_R", "structure": "mandible", "volume_mm3": 2100},
             {"id": "ramus_R", "structure": "mandible", "volume_mm3": 5500},
@@ -106,10 +134,10 @@ DEMO_CASES = [
         "ct_quality_grade": "B",
     },
     {
-        "case_type": "zmc",
+        "case_type": "TRAUMA",
         "fracture_classification": "AO CMF: 92-B1.1 (left ZMC, comminuted)",
-        "status": "planning",
-        "surgeon": "Dr. Johnson",
+        "status": "REVIEWED",
+        "surgeon": "demo-surgeon-002",
         "fragments": [
             {"id": "zygoma_L", "structure": "zygoma", "volume_mm3": 3200},
             {"id": "orbital_rim_L", "structure": "orbit", "volume_mm3": 1100},
@@ -119,10 +147,10 @@ DEMO_CASES = [
         "ct_quality_grade": "A",
     },
     {
-        "case_type": "panfacial",
+        "case_type": "TRAUMA",
         "fracture_classification": "AO CMF: 93-C3 (panfacial, high complexity)",
-        "status": "uploaded",
-        "surgeon": "Dr. Smith",
+        "status": "CREATED",
+        "surgeon": "demo-surgeon-001",
         "fragments": [
             {"id": "frontal_bar", "structure": "frontal", "volume_mm3": 5800},
             {"id": "zygoma_L", "structure": "zygoma", "volume_mm3": 3100},
@@ -131,6 +159,37 @@ DEMO_CASES = [
             {"id": "mandible_body_L", "structure": "mandible", "volume_mm3": 4000},
             {"id": "mandible_angle_R", "structure": "mandible", "volume_mm3": 3500},
             {"id": "noe_complex", "structure": "naso-orbito-ethmoidal", "volume_mm3": 1200},
+        ],
+        "ct_quality_grade": "B",
+    },
+    {
+        "case_type": "TRAUMA",
+        "fracture_classification": "AO CMF: 91-A2.1 (left mandible angle)",
+        "status": "DICOM_PROCESSING",
+        "surgeon": "demo-surgeon-001",
+        "fragments": [
+            {"id": "mandible_angle_L", "structure": "mandible", "volume_mm3": 3800},
+        ],
+        "ct_quality_grade": "A",
+    },
+    {
+        "case_type": "ORTHOGNATHIC",
+        "fracture_classification": "Le Fort I osteotomy (planned orthognathic)",
+        "status": "PLANNED",
+        "surgeon": "demo-surgeon-002",
+        "fragments": [
+            {"id": "maxilla_central", "structure": "maxilla", "volume_mm3": 6100},
+            {"id": "maxilla_alveolar", "structure": "maxilla", "volume_mm3": 3200},
+        ],
+        "ct_quality_grade": "A",
+    },
+    {
+        "case_type": "TRAUMA",
+        "fracture_classification": "Nasal bone fracture with septal deviation",
+        "status": "ARCHIVED",
+        "surgeon": "demo-surgeon-002",
+        "fragments": [
+            {"id": "nasal_bone", "structure": "nasal", "volume_mm3": 1200},
         ],
         "ct_quality_grade": "B",
     },
@@ -202,6 +261,45 @@ DEMO_CT_STUDIES = [
         "kvp": 120,
         "exposure_ma": 210,
         "convolution_kernel": "FC30 (bone sharp)",
+    },
+    {
+        "modality": "CT",
+        "manufacturer": "Siemens",
+        "model": "SOMATOM go.Top",
+        "slice_thickness_mm": 0.75,
+        "pixel_spacing_mm": 0.44,
+        "rows": 512,
+        "columns": 512,
+        "num_slices": 260,
+        "kvp": 120,
+        "exposure_ma": 170,
+        "convolution_kernel": "Br64s (bone)",
+    },
+    {
+        "modality": "CT",
+        "manufacturer": "GE Healthcare",
+        "model": "Discovery CT750 HD",
+        "slice_thickness_mm": 0.625,
+        "pixel_spacing_mm": 0.42,
+        "rows": 512,
+        "columns": 512,
+        "num_slices": 300,
+        "kvp": 120,
+        "exposure_ma": 195,
+        "convolution_kernel": "BONE",
+    },
+    {
+        "modality": "CT",
+        "manufacturer": "Philips",
+        "model": "Ingenuity CT",
+        "slice_thickness_mm": 0.8,
+        "pixel_spacing_mm": 0.46,
+        "rows": 512,
+        "columns": 512,
+        "num_slices": 250,
+        "kvp": 120,
+        "exposure_ma": 175,
+        "convolution_kernel": "YB (bone detail)",
     },
 ]
 
@@ -323,11 +421,11 @@ def build_demo_dataset() -> Dict[str, Any]:
                 **ct_study,
                 "quality_grade": case_def["ct_quality_grade"],
             },
-            "segmentation": seg_result if case_def["status"] != "uploaded" else None,
+            "segmentation": seg_result if case_def["status"] not in ("CREATED", "DICOM_PROCESSING") else None,
             "fragments": case_def["fragments"],
             "reduction_plan": (
                 generate_reduction_plan(case_def["fragments"])
-                if case_def["status"] in ("planning", "plan_approved")
+                if case_def["status"] in ("PLANNING", "PLANNED", "REVIEWED", "APPROVED", "ARCHIVED")
                 else None
             ),
         }
@@ -338,14 +436,237 @@ def build_demo_dataset() -> Dict[str, Any]:
     return dataset
 
 
+# ─── Deterministic UUIDs for demo data (idempotent) ─────────────────────────
+
+DEMO_NAMESPACE = uuid.UUID("fa000000-0000-4000-8000-000000000000")
+
+
+def _demo_uuid(label: str) -> str:
+    """Generate a deterministic UUID from a label for idempotent seeding."""
+    return str(uuid.uuid5(DEMO_NAMESPACE, label))
+
+
+# ─── Database seeding ────────────────────────────────────────────────────────
+
+
+async def seed_to_database() -> None:
+    """Write demo data directly to the database using async SQLAlchemy."""
+    import random
+
+    from app.db.database import create_db_engine, dispose_db_engine, get_db_context
+    from app.models.case import SurgicalCase
+    from app.models.patient import Patient
+    from app.models.plan import ReductionPlan
+    from app.models.segmentation import SegmentationResult
+    from app.models.study import ImagingStudy
+
+    random.seed(42)  # Reproducible
+
+    await create_db_engine()
+
+    try:
+        # Check idempotency — if first demo patient already exists, skip
+        async with get_db_context() as db:
+            from sqlalchemy import select
+            first_patient_id = _demo_uuid("patient-DEMO-PT-001")
+            existing = (await db.execute(
+                select(Patient.id).where(Patient.id == first_patient_id)
+            )).scalar_one_or_none()
+            if existing:
+                print("Demo data already exists. Skipping (idempotent).")
+                return
+
+        base_date = datetime.now(timezone.utc) - timedelta(days=60)
+
+        async with get_db_context() as db:
+            # ── Create patients ──
+            patient_ids: List[str] = []
+            for i, pt in enumerate(DEMO_PATIENTS):
+                pid = _demo_uuid(f"patient-{pt['patient_id']}")
+                patient_ids.append(pid)
+                mrn_hash = hashlib.sha256(
+                    f"demo-salt-{pt['patient_id']}".encode()
+                ).hexdigest()
+                db.add(Patient(
+                    id=pid,
+                    mrn_hash=mrn_hash,
+                    institution_code="DEMO-INST",
+                    age_at_registration=pt["age_at_scan"],
+                    sex=pt["sex"],
+                    created_by="seed_demo_data",
+                    is_active=True,
+                ))
+            print(f"  Created {len(patient_ids)} patients")
+
+            # ── Create imaging studies ──
+            study_ids: List[str] = []
+            for i, (pt, ct) in enumerate(zip(DEMO_PATIENTS, DEMO_CT_STUDIES)):
+                sid = _demo_uuid(f"study-{pt['patient_id']}")
+                study_ids.append(sid)
+                study_uid = generate_study_uid()
+                acq_date = (base_date + timedelta(days=i * 7)).date()
+                db.add(ImagingStudy(
+                    id=sid,
+                    study_uid=study_uid,
+                    patient_id=patient_ids[i],
+                    modality=ct["modality"],
+                    acquisition_date=acq_date,
+                    series_count=random.randint(1, 3),
+                    slice_count=ct["num_slices"],
+                    storage_path=f"/data/demo/studies/{pt['patient_id']}/dicom",
+                    volume_path=f"/data/demo/studies/{pt['patient_id']}/volume.nii.gz",
+                    slice_thickness_mm=ct["slice_thickness_mm"],
+                    pixel_spacing_mm=ct["pixel_spacing_mm"],
+                    kv_peak=ct["kvp"],
+                    body_part_examined="HEAD",
+                    metadata_json={
+                        "manufacturer": ct["manufacturer"],
+                        "model": ct["model"],
+                        "kernel": ct["convolution_kernel"],
+                    },
+                    quality_score=round(random.uniform(0.80, 0.99), 3),
+                    quality_flags=[],
+                    is_deidentified=True,
+                    ingestion_status="complete",
+                    uploaded_by="seed_demo_data",
+                ))
+            print(f"  Created {len(study_ids)} imaging studies")
+
+            # ── Create surgical cases ──
+            case_ids: List[str] = []
+            case_numbers: List[str] = []
+            for i, case_def in enumerate(DEMO_CASES):
+                cid = _demo_uuid(f"case-{i}")
+                case_ids.append(cid)
+                case_num = f"FA-2024-{1001 + i:04d}"
+                case_numbers.append(case_num)
+                case_date = base_date + timedelta(days=i * 7, hours=random.randint(6, 18))
+                db.add(SurgicalCase(
+                    id=cid,
+                    case_number=case_num,
+                    patient_id=patient_ids[i],
+                    study_id=study_ids[i],
+                    case_type=case_def["case_type"],
+                    status=case_def["status"],
+                    fracture_classification=case_def["fracture_classification"],
+                    planned_procedure=f"ORIF {case_def['fracture_classification']}",
+                    surgeon_id=case_def["surgeon"],
+                    created_by="seed_demo_data",
+                    created_at=case_date,
+                    updated_at=case_date + timedelta(hours=random.randint(1, 48)),
+                ))
+            print(f"  Created {len(case_ids)} surgical cases")
+
+            # ── Create segmentation results for cases past CREATED/DICOM_PROCESSING ──
+            seg_count = 0
+            for i, case_def in enumerate(DEMO_CASES):
+                if case_def["status"] in ("CREATED", "DICOM_PROCESSING"):
+                    continue
+                seg_id = _demo_uuid(f"seg-{i}")
+                seg_result = generate_segmentation_result(SEGMENTATION_STRUCTURES[:15])
+                confidence_scores = {
+                    s: seg_result["structures"][s]["confidence"]
+                    for s in seg_result["structures"]
+                }
+                volume_stats = {
+                    s: {
+                        "volume_cc": round(seg_result["structures"][s]["volume_mm3"] / 1000, 2),
+                        "surface_area_mm2": seg_result["structures"][s]["surface_area_mm2"],
+                    }
+                    for s in seg_result["structures"]
+                }
+                db.add(SegmentationResult(
+                    id=seg_id,
+                    case_id=case_ids[i],
+                    model_name="totalsegmentator",
+                    model_version="2.0.1",
+                    structure_labels={s: idx + 1 for idx, s in enumerate(SEGMENTATION_STRUCTURES[:15])},
+                    mask_storage_path=f"/data/demo/cases/{case_ids[i]}/segmentation/mask.nii.gz",
+                    confidence_scores=confidence_scores,
+                    overall_confidence=seg_result["overall_confidence"],
+                    inference_time_ms=random.randint(15000, 40000),
+                    total_pipeline_time_ms=random.randint(25000, 60000),
+                    gpu_device="cuda:0",
+                    volume_stats=volume_stats,
+                    fragment_count=len(case_def["fragments"]),
+                    status="complete",
+                    completed_at=datetime.now(timezone.utc) - timedelta(days=random.randint(1, 30)),
+                ))
+                seg_count += 1
+            print(f"  Created {seg_count} segmentation results")
+
+            # ── Create reduction plans for cases at PLANNING+ ──
+            plan_count = 0
+            planning_statuses = ("PLANNING", "PLANNED", "REVIEWED", "APPROVED", "ARCHIVED")
+            for i, case_def in enumerate(DEMO_CASES):
+                if case_def["status"] not in planning_statuses:
+                    continue
+                plan_id = _demo_uuid(f"plan-{i}")
+                plan_data = generate_reduction_plan(case_def["fragments"])
+                transformations = {}
+                for frag in case_def["fragments"]:
+                    fdata = plan_data["fragments"].get(frag["id"], {})
+                    transformations[frag["id"]] = {
+                        "rotation_matrix": fdata.get("rotation_matrix", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+                        "translation_mm": fdata.get("translation_mm", [0, 0, 0]),
+                        "confidence": fdata.get("confidence", 0.85),
+                    }
+                is_approved = case_def["status"] in ("APPROVED", "ARCHIVED")
+                plan_status_map = {
+                    "PLANNING": "draft",
+                    "PLANNED": "validated",
+                    "REVIEWED": "surgeon_reviewed",
+                    "APPROVED": "approved",
+                    "ARCHIVED": "approved",
+                }
+                db.add(ReductionPlan(
+                    id=plan_id,
+                    case_id=case_ids[i],
+                    plan_version=1,
+                    model_name="baseline_icp",
+                    model_version="1.0.0",
+                    fragments={
+                        f["id"]: {"label": f["structure"], "volume_cc": round(f["volume_mm3"] / 1000, 2)}
+                        for f in case_def["fragments"]
+                    },
+                    transformations=transformations,
+                    confidence_score=round(random.uniform(0.75, 0.95), 3),
+                    validation_passed=case_def["status"] != "PLANNING",
+                    validation_warnings=[],
+                    surgeon_approved=is_approved,
+                    is_ml_generated=True,
+                    status=plan_status_map.get(case_def["status"], "draft"),
+                    generation_time_ms=random.randint(2000, 8000),
+                    approved_at=(
+                        datetime.now(timezone.utc) - timedelta(days=random.randint(1, 10))
+                        if is_approved else None
+                    ),
+                    approved_by="demo-surgeon-001" if is_approved else None,
+                ))
+                plan_count += 1
+            print(f"  Created {plan_count} reduction plans")
+
+        print("\nDatabase seeding complete.")
+
+    finally:
+        await dispose_db_engine()
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Seed demo data for Facial Align")
     parser.add_argument("--clear", action="store_true", help="Clear existing demo data")
-    parser.add_argument("--output", "-o", type=str, default=None, help="Write to JSON file instead of DB")
+    parser.add_argument("--db", action="store_true", help="Write directly to database via async SQLAlchemy")
+    parser.add_argument("--output", "-o", type=str, default=None, help="Write to JSON file")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     args = parser.parse_args()
+
+    if args.db:
+        print("Seeding demo data directly to database...")
+        asyncio.run(seed_to_database())
+        print("Done.")
+        return
 
     print("Generating demo dataset...")
     dataset = build_demo_dataset()

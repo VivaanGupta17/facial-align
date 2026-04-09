@@ -451,6 +451,11 @@ def run_supervised_reduction_pipeline(
         return result
     except Exception as exc:
         task_logger.error(f"Supervised reduction failed | plan_id={plan_id} | error={exc}")
+        _publish_ws_event(case_id, "pipeline_error", {
+            "stage": "error",
+            "progress": 0,
+            "message": str(exc),
+        })
         _mark_plan_failed(plan_id, str(exc))
         raise
 
@@ -507,6 +512,11 @@ async def _supervised_reduction_pipeline(
 
     # ── 2. Load CT volume ──
     task.update_state(state="PROGRESS", meta={"progress": 20, "step": "Loading CT volume"})
+    _publish_ws_event(case_id, "pipeline_progress", {
+        "stage": "dicom_loading",
+        "progress": 0.05,
+        "message": "Loading DICOM volume...",
+    })
 
     import SimpleITK as sitk
     volume_path = study.volume_path
@@ -516,6 +526,12 @@ async def _supervised_reduction_pipeline(
         ct_spacing = tuple(reversed(sitk_img.GetSpacing()))  # sitk returns (x,y,z), we need (z,y,x)
     else:
         raise ValueError(f"CT volume not found at {volume_path}")
+
+    _publish_ws_event(case_id, "pipeline_progress", {
+        "stage": "segmentation",
+        "progress": 0.2,
+        "message": "Running bone segmentation...",
+    })
 
     # ── 3. Load fragment meshes ──
     task.update_state(state="PROGRESS", meta={"progress": 30, "step": "Loading fragment meshes"})
@@ -530,6 +546,12 @@ async def _supervised_reduction_pipeline(
 
     if not fragments:
         raise ValueError(f"No fragments found in segmentation {segmentation_id}")
+
+    _publish_ws_event(case_id, "pipeline_progress", {
+        "stage": "fragment_extraction",
+        "progress": 0.4,
+        "message": "Extracting bone fragments...",
+    })
 
     # ── 4. Load IOS tooth meshes (optional) ──
     task.update_state(state="PROGRESS", meta={"progress": 35, "step": "Loading dental meshes"})
@@ -551,6 +573,11 @@ async def _supervised_reduction_pipeline(
 
     # ── 5. Run supervised inference ──
     task.update_state(state="PROGRESS", meta={"progress": 40, "step": "Running supervised model inference"})
+    _publish_ws_event(case_id, "pipeline_progress", {
+        "stage": "supervised_inference",
+        "progress": 0.6,
+        "message": "Running AI-guided fracture reduction...",
+    })
 
     config = InferenceConfig(
         checkpoint_path=checkpoint_path,
@@ -568,6 +595,11 @@ async def _supervised_reduction_pipeline(
 
     # ── 6. Confidence gating ──
     task.update_state(state="PROGRESS", meta={"progress": 70, "step": "Evaluating prediction confidence"})
+    _publish_ws_event(case_id, "pipeline_progress", {
+        "stage": "confidence_evaluation",
+        "progress": 0.8,
+        "message": "Evaluating clinical confidence...",
+    })
 
     gate = ConfidenceGate()
     fragment_data = [
@@ -708,6 +740,14 @@ async def _supervised_reduction_pipeline(
 
     # ── 9. Chain to occlusion analysis ──
     run_occlusion_analysis_pipeline.delay(plan_id=plan_id, case_id=case_id)
+
+    _publish_ws_event(case_id, "pipeline_complete", {
+        "stage": "complete",
+        "progress": 1.0,
+        "message": "Reduction plan ready for review",
+        "plan_id": str(plan_id),
+        "confidence": plan.overall_confidence,
+    })
 
     return {
         "plan_id": plan_id,
@@ -856,6 +896,14 @@ def archive_old_task_results() -> Dict[str, int]:
 
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
+
+
+def _publish_ws_event(case_id: str, event_type: str, data: dict) -> None:
+    """Publish a progress event via Redis pub/sub for WebSocket relay."""
+    import json
+    import redis
+    r = redis.Redis(host="redis", port=6379, db=3)
+    r.publish(f"case:{case_id}", json.dumps({"type": event_type, **data}))
 
 
 def _mark_study_failed(study_id: str, error: str) -> None:

@@ -89,6 +89,7 @@ data/
 
 # Model weights
 models/
+!apps/backend/app/models/
 *.pt
 *.pth
 *.onnx
