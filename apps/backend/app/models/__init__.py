@@ -6,6 +6,7 @@ from app.models.patient import Patient
 from app.models.plan import ReductionPlan
 from app.models.segmentation import SegmentationResult
 from app.models.study import ImagingStudy
+from app.models.user import User
 
 __all__ = [
     "AuditLog",
@@ -14,4 +15,5 @@ __all__ = [
     "ReductionPlan",
     "SegmentationResult",
     "SurgicalCase",
+    "User",
 ]

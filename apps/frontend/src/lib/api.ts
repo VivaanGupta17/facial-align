@@ -64,19 +64,74 @@ async function fetchApi<T>(
 
   if (res.status === 401) {
     localStorage.removeItem('auth_token')
+    localStorage.removeItem('refresh_token')
     window.location.href = '/login'
     throw new Error('Session expired')
   }
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Unknown error' }))
-    throw new Error(error.message ?? error.detail ?? `HTTP ${res.status}`)
+    const error = await res.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail ?? error.message ?? `HTTP ${res.status}`)
   }
 
   // Handle 204 No Content
-  if (res.status === 204) return undefined as T
+  if (res.status === 204) return undefined as unknown as T
 
   return res.json() as Promise<T>
+}
+
+// ---------------------------
+// Auth types
+// ---------------------------
+
+export interface TokenResponse {
+  access_token: string
+  refresh_token: string
+  token_type: string
+  expires_in: number
+}
+
+export interface UserProfile {
+  id: string
+  email: string
+  full_name: string
+  role: string
+  institution: string | null
+  specialty: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface RegisterData {
+  email: string
+  password: string
+  full_name: string
+  role?: string
+  institution?: string
+  specialty?: string
+}
+
+// ---------------------------
+// Auth API
+// ---------------------------
+
+export const authApi = {
+  login: (email: string, password: string) =>
+    fetchApi<TokenResponse>('/auth/login', { method: 'POST', body: { email, password } }),
+
+  register: (data: RegisterData) =>
+    fetchApi<TokenResponse>('/auth/register', { method: 'POST', body: data }),
+
+  me: () => fetchApi<UserProfile>('/auth/me'),
+
+  updateMe: (data: { full_name?: string; institution?: string; specialty?: string }) =>
+    fetchApi<UserProfile>('/auth/me', { method: 'PUT', body: data }),
+
+  refresh: (refreshToken: string) =>
+    fetchApi<TokenResponse>('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    fetchApi<void>('/auth/change-password', { method: 'POST', body: { current_password: currentPassword, new_password: newPassword } }),
 }
 
 // ---------------------------

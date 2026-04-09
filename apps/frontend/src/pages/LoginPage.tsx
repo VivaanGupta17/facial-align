@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { LogIn, AlertCircle, Loader2 } from 'lucide-react'
+import { authApi } from '../lib/api'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -8,22 +10,35 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-
-    if (!email || !password) {
-      setError('Please enter both email and password.')
-      return
-    }
-
     setLoading(true)
-    // Mock auth — store a dev token and redirect
-    await new Promise(r => setTimeout(r, 400))
-    localStorage.setItem('auth_token', 'dev-token-facial-align')
-    localStorage.setItem('auth_user', JSON.stringify({ email, name: email.split('@')[0] }))
-    setLoading(false)
-    navigate('/dashboard', { replace: true })
+    try {
+      const res = await authApi.login(email, password)
+      localStorage.setItem('auth_token', res.access_token)
+      localStorage.setItem('refresh_token', res.refresh_token)
+      navigate('/dashboard', { replace: true })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Login failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleDemoLogin() {
+    setError(null)
+    setLoading(true)
+    try {
+      const res = await authApi.login('surgeon@facialign.local', 'surgeon')
+      localStorage.setItem('auth_token', res.access_token)
+      localStorage.setItem('refresh_token', res.refresh_token)
+      navigate('/dashboard', { replace: true })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Demo login failed')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -45,11 +60,19 @@ export default function LoginPage() {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4" data-testid="login-form">
+          {error && (
+            <div className="flex items-center gap-2 rounded-lg bg-red-950 border border-red-800 px-4 py-3 text-sm text-red-300" data-testid="login-error">
+              <AlertCircle size={16} className="shrink-0" />
+              {error}
+            </div>
+          )}
+
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-slate-300 mb-1.5">Email</label>
             <input
               id="email"
               type="email"
+              required
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="surgeon@hospital.org"
@@ -64,6 +87,7 @@ export default function LoginPage() {
             <input
               id="password"
               type="password"
+              required
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="Enter password"
@@ -72,17 +96,28 @@ export default function LoginPage() {
             />
           </div>
 
-          {error && (
-            <p className="text-sm text-red-400" data-testid="login-error">{error}</p>
-          )}
-
           <button
             type="submit"
             disabled={loading}
-            className="w-full btn-primary py-2.5 disabled:opacity-50"
+            className="w-full btn-primary py-2.5 disabled:opacity-50 flex items-center justify-center gap-2"
             data-testid="login-submit"
           >
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}
+            Sign In
+          </button>
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-700" /></div>
+            <div className="relative flex justify-center text-xs"><span className="bg-slate-800 px-2 text-slate-500">or</span></div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleDemoLogin}
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-700 disabled:opacity-50 transition-colors"
+          >
+            Demo Login
           </button>
 
           <p className="text-center text-sm text-slate-500">
@@ -92,10 +127,6 @@ export default function LoginPage() {
             </Link>
           </p>
         </form>
-
-        <p className="text-center text-xs text-slate-600 mt-4">
-          Development mode — no backend authentication
-        </p>
       </div>
     </div>
   )

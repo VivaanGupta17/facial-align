@@ -1,35 +1,45 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { UserPlus, AlertCircle, Loader2 } from 'lucide-react'
+import { authApi } from '../lib/api'
 
 export default function RegisterPage() {
   const navigate = useNavigate()
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
+  const [form, setForm] = useState({
+    email: '',
+    password: '',
+    full_name: '',
+    institution: '',
+    specialty: '',
+  })
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  function update(field: string, value: string) {
+    setForm(prev => ({ ...prev, [field]: value }))
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-
-    if (!name || !email || !password) {
-      setError('Please fill in all fields.')
-      return
-    }
-    if (password !== confirm) {
-      setError('Passwords do not match.')
-      return
-    }
-
     setLoading(true)
-    // Mock registration — store a dev token and redirect
-    await new Promise(r => setTimeout(r, 400))
-    localStorage.setItem('auth_token', 'dev-token-facial-align')
-    localStorage.setItem('auth_user', JSON.stringify({ email, name }))
-    setLoading(false)
-    navigate('/dashboard', { replace: true })
+    try {
+      const res = await authApi.register({
+        email: form.email,
+        password: form.password,
+        full_name: form.full_name,
+        role: 'surgeon',
+        institution: form.institution || undefined,
+        specialty: form.specialty || undefined,
+      })
+      localStorage.setItem('auth_token', res.access_token)
+      localStorage.setItem('refresh_token', res.refresh_token)
+      navigate('/dashboard', { replace: true })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Registration failed')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -51,13 +61,21 @@ export default function RegisterPage() {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4" data-testid="register-form">
+          {error && (
+            <div className="flex items-center gap-2 rounded-lg bg-red-950 border border-red-800 px-4 py-3 text-sm text-red-300" data-testid="register-error">
+              <AlertCircle size={16} className="shrink-0" />
+              {error}
+            </div>
+          )}
+
           <div>
-            <label htmlFor="name" className="block text-sm font-medium text-slate-300 mb-1.5">Full Name</label>
+            <label htmlFor="full_name" className="block text-sm font-medium text-slate-300 mb-1.5">Full Name</label>
             <input
-              id="name"
+              id="full_name"
               type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
+              required
+              value={form.full_name}
+              onChange={e => update('full_name', e.target.value)}
               placeholder="Dr. Jane Smith"
               className="input-base w-full"
               data-testid="register-name"
@@ -66,12 +84,13 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-slate-300 mb-1.5">Email</label>
+            <label htmlFor="reg-email" className="block text-sm font-medium text-slate-300 mb-1.5">Email</label>
             <input
-              id="email"
+              id="reg-email"
               type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
+              required
+              value={form.email}
+              onChange={e => update('email', e.target.value)}
               placeholder="surgeon@hospital.org"
               className="input-base w-full"
               data-testid="register-email"
@@ -79,42 +98,54 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-slate-300 mb-1.5">Password</label>
+            <label htmlFor="reg-password" className="block text-sm font-medium text-slate-300 mb-1.5">Password</label>
             <input
-              id="password"
+              id="reg-password"
               type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Create password"
+              required
+              minLength={6}
+              value={form.password}
+              onChange={e => update('password', e.target.value)}
+              placeholder="Min. 6 characters"
               className="input-base w-full"
               data-testid="register-password"
             />
           </div>
 
           <div>
-            <label htmlFor="confirm" className="block text-sm font-medium text-slate-300 mb-1.5">Confirm Password</label>
+            <label htmlFor="institution" className="block text-sm font-medium text-slate-300 mb-1.5">Institution <span className="text-slate-500">(optional)</span></label>
             <input
-              id="confirm"
-              type="password"
-              value={confirm}
-              onChange={e => setConfirm(e.target.value)}
-              placeholder="Confirm password"
+              id="institution"
+              type="text"
+              value={form.institution}
+              onChange={e => update('institution', e.target.value)}
+              placeholder="University Hospital"
               className="input-base w-full"
-              data-testid="register-confirm"
+              data-testid="register-institution"
             />
           </div>
 
-          {error && (
-            <p className="text-sm text-red-400" data-testid="register-error">{error}</p>
-          )}
+          <div>
+            <label htmlFor="specialty" className="block text-sm font-medium text-slate-300 mb-1.5">Specialty <span className="text-slate-500">(optional)</span></label>
+            <input
+              id="specialty"
+              type="text"
+              value={form.specialty}
+              onChange={e => update('specialty', e.target.value)}
+              placeholder="Oral and Maxillofacial Surgery"
+              className="input-base w-full"
+              data-testid="register-specialty"
+            />
+          </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full btn-primary py-2.5 disabled:opacity-50"
+            className="w-full btn-primary py-2.5 disabled:opacity-50 flex items-center justify-center gap-2"
             data-testid="register-submit"
           >
-            {loading ? 'Creating account...' : 'Create Account'}
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
+            Create Account
           </button>
 
           <p className="text-center text-sm text-slate-500">
@@ -124,10 +155,6 @@ export default function RegisterPage() {
             </Link>
           </p>
         </form>
-
-        <p className="text-center text-xs text-slate-600 mt-4">
-          Development mode — no backend authentication
-        </p>
       </div>
     </div>
   )
