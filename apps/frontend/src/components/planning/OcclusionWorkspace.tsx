@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Pencil, Check, X, RotateCcw } from 'lucide-react'
+import { Pencil, Check, X, RotateCcw, Download } from 'lucide-react'
 import { usePlan } from '../../hooks/usePlanning'
 import { useSegmentationResult } from '../../hooks/useSegmentation'
 import { usePlanningStore } from '../../stores/planningStore'
@@ -212,6 +212,7 @@ export default function OcclusionWorkspace({ caseId, planId }: OcclusionWorkspac
   const { currentPlan, setPlan } = usePlanningStore()
   const [applyingMetric, setApplyingMetric] = useState<string | null>(null)
   const [molarOverride, setMolarOverride] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   if (isLoading) return <PageLoading label="Loading occlusion workspace..." />
 
@@ -255,6 +256,24 @@ export default function OcclusionWorkspace({ caseId, planId }: OcclusionWorkspac
       // Error handling
     } finally {
       setMolarOverride(null)
+    }
+  }
+
+  const handleExportSplint = async () => {
+    if (!planId) return
+    setExporting(true)
+    try {
+      const blob = await planningApi.exportSplint(planId, 'intermediate_splint')
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `splint-${planId}.stl`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Splint export failed:', err)
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -420,11 +439,10 @@ export default function OcclusionWorkspace({ caseId, planId }: OcclusionWorkspac
               </div>
             )}
 
-            {/* Splint design preview */}
+            {/* Splint design */}
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4" data-testid="splint-preview">
               <div className="flex items-center justify-between mb-3">
                 <p className="label-xs">Splint Design</p>
-                <span className="text-2xs text-slate-500 bg-slate-700 px-1.5 py-0.5 rounded">Coming Soon</span>
               </div>
               <div className="h-24 rounded-md bg-slate-900 border border-dashed border-slate-700 flex items-center justify-center">
                 <div className="text-center">
@@ -433,8 +451,14 @@ export default function OcclusionWorkspace({ caseId, planId }: OcclusionWorkspac
                   <p className="text-2xs text-slate-700 mt-0.5">Requires approved occlusion plan</p>
                 </div>
               </div>
-              <button className="w-full mt-3 btn-secondary text-xs" disabled data-testid="export-splint-btn">
-                Export Splint Design (STL)
+              <button
+                onClick={handleExportSplint}
+                disabled={!planId || exporting}
+                className="w-full mt-3 flex items-center justify-center gap-2 btn-secondary text-xs disabled:opacity-40"
+                data-testid="export-splint-btn"
+              >
+                <Download size={13} />
+                {exporting ? 'Exporting...' : 'Export Splint Design (STL)'}
               </button>
             </div>
           </div>

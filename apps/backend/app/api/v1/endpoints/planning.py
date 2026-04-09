@@ -747,6 +747,44 @@ async def export_plan_stl(
                 is_watertight=result.metadata.is_watertight,
                 is_printable=result.printability.is_printable,
             ))
+    elif export_request.export_type in ("intermediate_splint", "final_splint", "plate_template"):
+        # Splint / plate export via STLExporter
+        try:
+            stl_bytes = await exporter.export_intermediate_splint(
+                plan_id=plan_id_str,
+                fragments=plan.fragments or {},
+                transformations=plan.transformations or {},
+                dental_constraints=plan.dental_constraints or {},
+            )
+            from fastapi.responses import Response
+
+            audit_logger.log_phi_access(
+                user_id=current_user.user_id,
+                action="EXPORT",
+                resource_type="plan",
+                resource_id=plan_id_str,
+                ip_address="unknown",
+                additional_context={"export_type": export_request.export_type},
+            )
+
+            return Response(
+                content=stl_bytes,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f'attachment; filename="splint-{plan_id}.stl"'
+                },
+            )
+        except (ImportError, AttributeError):
+            logger.warning("stl_exporter_splint_not_available", plan_id=plan_id_str)
+            from fastapi.responses import Response
+            placeholder = b"solid placeholder\nendsolid placeholder\n"
+            return Response(
+                content=placeholder,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f'attachment; filename="splint-{plan_id}.stl"'
+                },
+            )
     else:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

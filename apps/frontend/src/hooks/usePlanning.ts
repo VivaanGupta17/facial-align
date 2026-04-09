@@ -86,3 +86,12 @@ export function useRequestRevision(caseId: string) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: planningKeys.review(caseId) }) },
   })
 }
+
+export function useRejectReview(caseId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ reviewId, notes }: { reviewId: string; notes: string }) =>
+      reviewApi.reject(reviewId, notes),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: planningKeys.review(caseId) }) },
+  })
+}

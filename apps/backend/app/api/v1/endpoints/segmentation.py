@@ -260,6 +260,137 @@ async def get_confidence_maps(
     return maps
 
 
+@router.post(
+    "/{segmentation_id}/structures/{label}/approve",
+    status_code=status.HTTP_200_OK,
+    summary="Approve a segmented structure",
+)
+async def approve_structure(
+    segmentation_id: uuid.UUID,
+    label: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> dict:
+    """Mark a segmented structure as clinician-approved."""
+    row = (
+        await db.execute(
+            select(SegmentationModel).where(SegmentationModel.id == segmentation_id)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+
+    structures: dict = row.structures or {}
+    if label not in structures:
+        structures[label] = {}
+    structures[label]["status"] = "accepted"
+    structures[label]["reviewed_by"] = current_user.user_id
+    row.structures = structures
+    # Force SQLAlchemy to detect the JSONB mutation
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(row, "structures")
+
+    logger.info(
+        "structure_approved",
+        segmentation_id=str(segmentation_id),
+        label=label,
+        user_id=current_user.user_id,
+    )
+    return {"status": "accepted", "label": label}
+
+
+@router.post(
+    "/{segmentation_id}/structures/{label}/reject",
+    status_code=status.HTTP_200_OK,
+    summary="Reject a segmented structure",
+)
+async def reject_structure(
+    segmentation_id: uuid.UUID,
+    label: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> dict:
+    """Mark a segmented structure as rejected by clinician."""
+    row = (
+        await db.execute(
+            select(SegmentationModel).where(SegmentationModel.id == segmentation_id)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+
+    structures: dict = row.structures or {}
+    if label not in structures:
+        structures[label] = {}
+    structures[label]["status"] = "rejected"
+    structures[label]["reviewed_by"] = current_user.user_id
+    row.structures = structures
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(row, "structures")
+
+    logger.info(
+        "structure_rejected",
+        segmentation_id=str(segmentation_id),
+        label=label,
+        user_id=current_user.user_id,
+    )
+    return {"status": "rejected", "label": label}
+
+
+@router.post(
+    "/{segmentation_id}/structures/{label}/resegment",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Request re-segmentation of a structure",
+)
+async def request_resegmentation(
+    segmentation_id: uuid.UUID,
+    label: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> dict:
+    """Request re-segmentation of a specific structure via Celery."""
+    from app.workers.tasks import run_segmentation_pipeline
+
+    row = (
+        await db.execute(
+            select(SegmentationModel).where(SegmentationModel.id == segmentation_id)
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+
+    task = run_segmentation_pipeline.delay(
+        segmentation_id=str(segmentation_id),
+        case_id=str(row.case_id),
+        study_id="",
+        model_name=row.model_name,
+        structures=[label],
+        run_dental=False,
+        identify_fragments=False,
+        fast_mode=True,
+        gpu_device=None,
+        user_id=current_user.user_id,
+    )
+
+    structures: dict = row.structures or {}
+    if label not in structures:
+        structures[label] = {}
+    structures[label]["status"] = "pending"
+    structures[label]["resegment_task_id"] = task.id
+    row.structures = structures
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(row, "structures")
+
+    logger.info(
+        "resegmentation_requested",
+        segmentation_id=str(segmentation_id),
+        label=label,
+        job_id=task.id,
+        user_id=current_user.user_id,
+    )
+    return {"job_id": task.id, "label": label, "status": "pending"}
+
+
 def _to_schema(row: SegmentationModel) -> SegmentationResult:
     """Convert ORM model to response schema."""
     labels: list[StructureLabel] = []

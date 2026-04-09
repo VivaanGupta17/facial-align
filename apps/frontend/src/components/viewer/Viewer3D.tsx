@@ -206,6 +206,7 @@ function SceneContent({
             visible={vis.visible}
             position={positionMap[structure.label] ?? [0, 0, 0]}
             shapeVariant={shapeMap[structure.label] ?? 'bone'}
+            meshUri={structure.meshUri || undefined}
             onClick={() => handleSelectFragment(structure.label)}
           />
         )

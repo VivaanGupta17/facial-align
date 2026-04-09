@@ -1,10 +1,11 @@
-"""SurgicalCase ORM model — central case entity."""
+"""SurgicalCase ORM model — central case entity with state-machine transitions."""
 
 from __future__ import annotations
 
 import enum
 import uuid
 from datetime import datetime
+from typing import Set
 
 from sqlalchemy import String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID

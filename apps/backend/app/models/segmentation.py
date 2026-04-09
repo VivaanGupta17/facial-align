@@ -26,6 +26,7 @@ class SegmentationResult(Base):
     model_version: Mapped[str] = mapped_column(String(32), nullable=False)
     model_checkpoint: Mapped[str | None] = mapped_column(String(128), nullable=True)
     structure_labels: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    structures: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     mask_storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     mesh_storage_paths: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     confidence_scores: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

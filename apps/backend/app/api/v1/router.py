@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     health,
     jobs,
     planning,
+    reviews,
     segmentation,
     viewer,
     websocket,
@@ -24,6 +25,7 @@ api_router.include_router(cases.router)
 api_router.include_router(dicom.router)
 api_router.include_router(segmentation.router)
 api_router.include_router(planning.router)
+api_router.include_router(reviews.router)
 api_router.include_router(viewer.router)
 api_router.include_router(jobs.router)
 api_router.include_router(websocket.router)

@@ -184,10 +184,10 @@ export const casesApi = {
     fetchApi<SurgicalCase>(`/cases/${caseId}`, { method: 'PATCH', body: data }),
 
   /** Transition case status */
-  transitionStatus: async (caseId: string, targetStatus: string): Promise<SurgicalCase> =>
-    fetchApi<SurgicalCase>(`/cases/${caseId}/status`, {
+  transitionStatus: async (caseId: string, newStatus: string, notes?: string): Promise<void> =>
+    fetchApi(`/cases/${caseId}/status`, {
       method: 'POST',
-      body: { targetStatus },
+      body: { new_status: newStatus, notes },
     }),
 
   /** Get recent cases for dashboard */
@@ -252,6 +252,16 @@ export const dashboardApi = {
 // ---------------------------
 
 export const studiesApi = {
+  /** List all imaging studies (paginated) */
+  list: async (params: { page?: number; pageSize?: number; modality?: string } = {}): Promise<PaginatedResponse<Study>> =>
+    fetchApi<PaginatedResponse<Study>>('/dicom/studies', {
+      params: {
+        page: params.page,
+        page_size: params.pageSize,
+        modality: params.modality,
+      },
+    }),
+
   /** Get study by ID */
   get: async (studyId: string): Promise<Study> =>
     fetchApi<Study>(`/dicom/studies/${studyId}`),
@@ -456,25 +466,17 @@ export const segmentationApi = {
   ): Promise<{ status: string; progress: number; currentStep?: string }> =>
     fetchApi(`/jobs/${jobId}`),
 
-  /** Approve a segmentation structure (backend TBD) */
-  approveStructure: async (_caseId: string, _label: string): Promise<void> => {
-    console.warn('approveStructure: backend endpoint not yet implemented')
-  },
+  /** Approve a segmentation structure */
+  approveStructure: async (caseId: string, label: string): Promise<void> =>
+    fetchApi(`/segmentation/${caseId}/structures/${label}/approve`, { method: 'POST' }),
 
-  /** Reject a segmentation structure (backend TBD) */
-  rejectStructure: async (_caseId: string, _label: string): Promise<void> => {
-    console.warn('rejectStructure: backend endpoint not yet implemented')
-  },
+  /** Reject a segmentation structure */
+  rejectStructure: async (caseId: string, label: string): Promise<void> =>
+    fetchApi(`/segmentation/${caseId}/structures/${label}/reject`, { method: 'POST' }),
 
   /** Request re-segmentation for a specific structure */
-  requestResegmentation: async (
-    caseId: string,
-    label: string
-  ): Promise<{ jobId: string }> =>
-    fetchApi('/segmentation', {
-      method: 'POST',
-      body: { caseId, structures: [label] },
-    }),
+  requestResegmentation: async (caseId: string, label: string): Promise<{ jobId: string }> =>
+    fetchApi(`/segmentation/${caseId}/structures/${label}/resegment`, { method: 'POST' }),
 }
 
 // ---------------------------
@@ -526,6 +528,32 @@ export const planningApi = {
   /** List all plan versions for a case */
   listVersions: async (caseId: string): Promise<ReductionPlan[]> =>
     fetchApi<ReductionPlan[]>(`/planning/cases/${caseId}`),
+
+  /** Override an occlusal metric and re-optimize */
+  overrideMetric: async (
+    planId: string,
+    metricName: string,
+    targetValue: number,
+    notes?: string
+  ): Promise<ReductionPlan> =>
+    fetchApi<ReductionPlan>(`/planning/${planId}/metric-override`, {
+      method: 'POST',
+      body: { metric_name: metricName, target_value: targetValue, notes },
+    }),
+
+  /** Export splint design as STL blob */
+  exportSplint: async (planId: string, exportType: string): Promise<Blob> =>
+    fetch(`${BASE_URL}/planning/${planId}/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+      },
+      body: JSON.stringify({ export_type: exportType }),
+    }).then(res => {
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+      return res.blob()
+    }),
 }
 
 // ---------------------------
@@ -581,20 +609,6 @@ export const exportApi = {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(objUrl)
-  },
-
-  overrideMetric: async (
-    planId: string,
-    metricName: string,
-    targetValue: number,
-    notes?: string
-  ): Promise<ReductionPlan> => {
-    await delay(800) // Simulate re-optimization
-    return {
-      ...MOCK_REDUCTION_PLAN,
-      id: `plan-override-${Date.now()}`,
-      version: MOCK_REDUCTION_PLAN.version + 1,
-    }
   },
 }
 
