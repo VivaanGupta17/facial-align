@@ -59,3 +59,4 @@ class ImagingStudy(Base):
     # Relationships
     patient = relationship("Patient", back_populates="imaging_studies")
     surgical_cases = relationship("SurgicalCase", back_populates="study")
+    case_studies = relationship("CaseStudy", back_populates="study")

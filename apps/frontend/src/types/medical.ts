@@ -126,6 +126,36 @@ export interface Study {
 }
 
 // ---------------------------
+// Study Role & Case-Study junction
+// ---------------------------
+
+export type StudyRole = 'pre_op' | 'post_op' | 'follow_up' | 'intra_op'
+
+export interface CaseStudyInfo {
+  id: string
+  studyId: string
+  studyRole: StudyRole
+  studyLabel: string | null
+  isPrimary: boolean
+  displayOrder: number
+  createdAt: string
+  studyUid: string | null
+  modality: string | null
+  acquisitionDate: string | null
+  ingestionStatus: string | null
+}
+
+export interface ChunkedUploadProgress {
+  uploadId: string
+  chunkSize: number
+  chunkCount: number
+  receivedCount: number
+  totalSize: number
+  speedBytesPerSec: number
+  etaSeconds: number
+}
+
+// ---------------------------
 // Surgical Case — matches backend CaseResponse
 // ---------------------------
 
@@ -154,6 +184,7 @@ export interface SurgicalCase {
   segmentationCount: number
   planCount: number
   allowedTransitions: string[]
+  studies: CaseStudyInfo[]
 }
 
 /** Lightweight item returned by the list endpoint */

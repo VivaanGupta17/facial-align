@@ -120,6 +120,9 @@ class CaseResponse(BaseSchema):
     segmentation_count: int = 0
     plan_count: int = 0
 
+    # Multi-study
+    studies: List["CaseStudyInfo"] = Field(default_factory=list)
+
     # Available transitions from current status
     allowed_transitions: List[str] = Field(
         default_factory=list,
@@ -162,3 +165,39 @@ class CaseListFilters(BaseSchema):
     created_after: Optional[datetime] = None
     created_before: Optional[datetime] = None
     has_approved_plan: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Case-Study junction schemas
+# ---------------------------------------------------------------------------
+
+
+class CaseStudyCreate(BaseSchema):
+    """Attach a study to a case."""
+    study_id: uuid.UUID = Field(..., description="ImagingStudy UUID to attach")
+    study_role: str = Field(default="pre_op", description="Role: pre_op, post_op, follow_up, intra_op")
+    study_label: Optional[str] = Field(None, max_length=128, description="Human label")
+    is_primary: bool = Field(default=False, description="Set as primary study for this case")
+
+
+class CaseStudyUpdate(BaseSchema):
+    """Partial update for a case-study link."""
+    study_role: Optional[str] = None
+    study_label: Optional[str] = Field(None, max_length=128)
+    is_primary: Optional[bool] = None
+
+
+class CaseStudyInfo(BaseSchema):
+    """Case-study link with study metadata for responses."""
+    id: uuid.UUID
+    study_id: uuid.UUID
+    study_role: str
+    study_label: Optional[str]
+    is_primary: bool
+    display_order: int
+    created_at: datetime
+    # Denormalised study metadata
+    study_uid: Optional[str] = None
+    modality: Optional[str] = None
+    acquisition_date: Optional[datetime] = None
+    ingestion_status: Optional[str] = None

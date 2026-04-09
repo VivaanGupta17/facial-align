@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Clock, User, FileText, Layers, Target, AlignCenter,
   ClipboardCheck, History, AlertTriangle, Play, CheckCircle, XCircle, Download,
+  Plus, Star, Trash2, Link2,
 } from 'lucide-react'
 import { useCase } from '../hooks/useCases'
 import { useCaseStore } from '../stores/caseStore'
@@ -15,7 +16,7 @@ import ReductionWorkspace from '../components/planning/ReductionWorkspace'
 import OcclusionWorkspace from '../components/planning/OcclusionWorkspace'
 import SurgeonReview from '../components/planning/SurgeonReview'
 import ExportPanel from '../components/planning/ExportPanel'
-import { casesApi } from '../lib/api'
+import { casesApi, caseStudiesApi } from '../lib/api'
 import { useWebSocket, type WsMessage } from '../hooks/useWebSocket'
 import type { SurgicalCase } from '../types/medical'
 
@@ -186,6 +187,73 @@ function OverviewTab({ caseData }: { caseData: SurgicalCase }) {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Studies section (multi-study) */}
+        <div className="card p-4" data-testid="studies-section">
+          <div className="flex items-center justify-between border-b border-slate-700 pb-2 mb-3">
+            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <Link2 size={14} className="text-slate-400" />
+              Attached Studies
+            </h3>
+            <a
+              href={`/upload?caseId=${caseData.id}`}
+              className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+              data-testid="add-study-link"
+            >
+              <Plus size={12} /> Add Study
+            </a>
+          </div>
+          {(!caseData.studies || caseData.studies.length === 0) ? (
+            <div className="text-sm text-slate-500 italic py-2">
+              No additional studies attached. Primary study: <span className="font-mono text-xs text-slate-400">{truncateId(caseData.studyId)}</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {caseData.studies.map(cs => {
+                const roleBg: Record<string, string> = {
+                  pre_op: 'bg-blue-950 text-blue-400 border-blue-800',
+                  post_op: 'bg-emerald-950 text-emerald-400 border-emerald-800',
+                  follow_up: 'bg-amber-950 text-amber-400 border-amber-800',
+                  intra_op: 'bg-violet-950 text-violet-400 border-violet-800',
+                }
+                return (
+                  <div key={cs.id} className="flex items-center gap-3 p-2 bg-slate-900 rounded-md border border-slate-700" data-testid={`case-study-${cs.id}`}>
+                    {cs.isPrimary && <Star size={14} className="text-amber-400 shrink-0" />}
+                    <span className={`text-2xs px-1.5 py-0.5 rounded border ${roleBg[cs.studyRole] ?? 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+                      {cs.studyRole.replace(/_/g, ' ')}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-200 truncate">{cs.studyLabel ?? cs.studyUid ?? truncateId(cs.studyId)}</p>
+                      <p className="text-2xs text-slate-500">{cs.modality ?? 'Unknown'} — {cs.ingestionStatus ?? 'pending'}</p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await caseStudiesApi.update(caseData.id, cs.studyId, { isPrimary: true })
+                        window.location.reload()
+                      }}
+                      className="text-2xs text-slate-500 hover:text-amber-400 transition-colors"
+                      title="Set as primary"
+                      data-testid={`set-primary-${cs.id}`}
+                    >
+                      <Star size={12} />
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await caseStudiesApi.detach(caseData.id, cs.studyId)
+                        window.location.reload()
+                      }}
+                      className="text-2xs text-slate-500 hover:text-red-400 transition-colors"
+                      title="Remove study"
+                      data-testid={`remove-study-${cs.id}`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Segmentation status */}

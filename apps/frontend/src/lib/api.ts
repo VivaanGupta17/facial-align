@@ -7,6 +7,7 @@
 import type {
   SurgicalCase,
   CaseListItem,
+  CaseStudyInfo,
   Study,
   SegmentationResult,
   ReductionPlan,
@@ -298,7 +299,138 @@ export const studiesApi = {
   /** Get study metadata */
   getMetadata: async (studyId: string): Promise<Record<string, unknown>> =>
     fetchApi<Record<string, unknown>>(`/dicom/studies/${studyId}/metadata`),
+
+  /** Chunked upload for large files (>100 MB) */
+  uploadChunked: async (
+    file: File,
+    patientMrn: string,
+    opts?: {
+      onProgress?: (received: number, total: number, speedBps: number, etaSec: number) => void
+      signal?: AbortSignal
+      patientAge?: number
+      patientSex?: string
+      institutionCode?: string
+      caseType?: string
+    },
+  ): Promise<{ jobId: string; studyId: string }> => {
+    const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB — matches backend
+
+    // 1. Init session
+    const initForm = new FormData()
+    initForm.append('filename', file.name)
+    initForm.append('total_size', String(file.size))
+    initForm.append('patient_mrn', patientMrn)
+    if (opts?.patientAge != null) initForm.append('patient_age', String(opts.patientAge))
+    if (opts?.patientSex) initForm.append('patient_sex', opts.patientSex)
+    if (opts?.institutionCode) initForm.append('institution_code', opts.institutionCode)
+    if (opts?.caseType) initForm.append('case_type', opts.caseType)
+
+    const initRes = await fetch(`${BASE_URL}/dicom/upload/init`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}` },
+      body: initForm,
+      signal: opts?.signal,
+    })
+    if (!initRes.ok) throw new Error(`Init failed: HTTP ${initRes.status}`)
+    const { uploadId, chunkCount } = (await initRes.json()) as {
+      uploadId: string; chunkSize: number; chunkCount: number; totalSize: number
+    }
+
+    // 2. Upload chunks with retry
+    const MAX_RETRIES = 3
+    let startTime = Date.now()
+
+    for (let i = 0; i < chunkCount; i++) {
+      if (opts?.signal?.aborted) throw new Error('Upload aborted')
+
+      const start = i * CHUNK_SIZE
+      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const blob = file.slice(start, end)
+
+      let attempt = 0
+      let success = false
+      while (!success && attempt < MAX_RETRIES) {
+        try {
+          const chunkForm = new FormData()
+          chunkForm.append('chunk', blob, `chunk_${i}`)
+          const chunkRes = await fetch(`${BASE_URL}/dicom/upload/${uploadId}/chunk/${i}`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}` },
+            body: chunkForm,
+            signal: opts?.signal,
+          })
+          if (!chunkRes.ok) throw new Error(`Chunk ${i} failed: HTTP ${chunkRes.status}`)
+          success = true
+        } catch (err) {
+          attempt++
+          if (attempt >= MAX_RETRIES) throw err
+          await new Promise(r => setTimeout(r, 1000 * attempt))
+        }
+      }
+
+      // Progress callback
+      const elapsed = (Date.now() - startTime) / 1000
+      const bytesUploaded = end
+      const speedBps = elapsed > 0 ? bytesUploaded / elapsed : 0
+      const remaining = file.size - bytesUploaded
+      const etaSec = speedBps > 0 ? remaining / speedBps : 0
+      opts?.onProgress?.(i + 1, chunkCount, speedBps, etaSec)
+    }
+
+    // 3. Complete
+    const completeRes = await fetch(`${BASE_URL}/dicom/upload/${uploadId}/complete`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+        'Content-Type': 'application/json',
+      },
+      signal: opts?.signal,
+    })
+    if (!completeRes.ok) throw new Error(`Complete failed: HTTP ${completeRes.status}`)
+    const result = await completeRes.json()
+    return { jobId: result.ingestionJobId, studyId: result.studyId }
+  },
+
+  /** Get chunked upload status (for resume) */
+  getUploadStatus: async (uploadId: string) =>
+    fetchApi<{
+      uploadId: string
+      status: string
+      receivedChunks: number[]
+      chunkCount: number
+      chunkSize: number
+      totalSize: number
+      filename: string
+    }>(`/dicom/upload/${uploadId}/status`),
 }
+
+// ---------------------------
+// Case Studies API (multi-study per case)
+// ---------------------------
+
+export const caseStudiesApi = {
+  /** List all studies attached to a case */
+  list: async (caseId: string): Promise<CaseStudyInfo[]> =>
+    fetchApi<CaseStudyInfo[]>(`/cases/${caseId}/studies`),
+
+  /** Attach a study to a case */
+  attach: async (
+    caseId: string,
+    data: { studyId: string; studyRole?: string; studyLabel?: string; isPrimary?: boolean }
+  ): Promise<CaseStudyInfo> =>
+    fetchApi<CaseStudyInfo>(`/cases/${caseId}/studies`, { method: 'POST', body: data }),
+
+  /** Detach a study from a case */
+  detach: async (caseId: string, studyId: string): Promise<void> =>
+    fetchApi<void>(`/cases/${caseId}/studies/${studyId}`, { method: 'DELETE' }),
+
+  /** Update role/label/primary for a case-study link */
+  update: async (
+    caseId: string,
+    studyId: string,
+    data: { studyRole?: string; studyLabel?: string; isPrimary?: boolean }
+  ): Promise<CaseStudyInfo> =>
+    fetchApi<CaseStudyInfo>(`/cases/${caseId}/studies/${studyId}`, { method: 'PATCH', body: data }),
 
 // ---------------------------
 // Segmentation API

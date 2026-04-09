@@ -39,6 +39,17 @@ export default function UploadPage() {
   const [notes, setNotes] = useState('')
   const [createdCaseNumber, setCreatedCaseNumber] = useState<string | null>(null)
   const [createdCaseId, setCreatedCaseId] = useState<string | null>(null)
+  // Chunked upload state
+  const [isChunked, setIsChunked] = useState(false)
+  const [chunkCurrent, setChunkCurrent] = useState(0)
+  const [chunkTotal, setChunkTotal] = useState(0)
+  const [uploadSpeed, setUploadSpeed] = useState(0)
+  const [uploadEta, setUploadEta] = useState(0)
+
+  // Study type for multi-study support
+  const [studyType, setStudyType] = useState('pre_op')
+  const [studyLabel, setStudyLabel] = useState('')
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -67,14 +78,44 @@ export default function UploadPage() {
     addToast({ type: 'info', message: 'Upload cancelled' })
   }
 
+  const CHUNKED_THRESHOLD = 100 * 1024 * 1024 // 100 MB
+
+  const fmtSpeed = (bps: number) => {
+    if (bps > 1e6) return `${(bps / 1e6).toFixed(1)} MB/s`
+    if (bps > 1e3) return `${(bps / 1e3).toFixed(0)} KB/s`
+    return `${bps.toFixed(0)} B/s`
+  }
+  const fmtEta = (sec: number) => {
+    if (sec < 60) return `${Math.ceil(sec)}s`
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.ceil(sec % 60)}s`
+    return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
+  }
+
   const handleUpload = async () => {
     if (files.length === 0) return
     setIsUploading(true)
     setUploadError(null)
     setUploadCancelled(false)
     abortRef.current = new AbortController()
+    const useChunked = files[0].size > CHUNKED_THRESHOLD
+    setIsChunked(useChunked)
     try {
-      const result = await studiesApi.upload(files[0], setUploadProgress)
+      let result: { jobId: string; studyId: string }
+      if (useChunked) {
+        result = await studiesApi.uploadChunked(files[0], 'auto-mrn', {
+          signal: abortRef.current.signal,
+          caseType: caseType,
+          onProgress: (received, total, speedBps, etaSec) => {
+            setChunkCurrent(received)
+            setChunkTotal(total)
+            setUploadSpeed(speedBps)
+            setUploadEta(etaSec)
+            setUploadProgress(Math.round((received / total) * 100))
+          },
+        })
+      } else {
+        result = await studiesApi.upload(files[0], setUploadProgress)
+      }
       if (uploadCancelled) return
       setJobId(result.jobId)
       setStudyId(result.studyId)
@@ -231,7 +272,11 @@ export default function UploadPage() {
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4" data-testid="upload-progress">
               <div className="flex items-center gap-3 mb-2">
                 <Spinner size={16} />
-                <span className="flex-1 text-sm text-slate-300">Uploading and validating DICOM data...</span>
+                <span className="flex-1 text-sm text-slate-300">
+                  {isChunked
+                    ? `Uploading chunk ${chunkCurrent} of ${chunkTotal}...`
+                    : 'Uploading and validating DICOM data...'}
+                </span>
                 <button
                   onClick={handleCancelUpload}
                   className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 transition-colors"
@@ -246,7 +291,12 @@ export default function UploadPage() {
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
-              <p className="text-xs text-slate-500 mt-1 font-mono text-right">{Math.round(uploadProgress)}%</p>
+              <div className="flex justify-between mt-1">
+                <span className="text-xs text-slate-500 font-mono">
+                  {isChunked && uploadSpeed > 0 && `${fmtSpeed(uploadSpeed)} — ETA ${fmtEta(uploadEta)}`}
+                </span>
+                <span className="text-xs text-slate-500 font-mono">{Math.round(uploadProgress)}%</span>
+              </div>
             </div>
           )}
 
@@ -379,6 +429,38 @@ export default function UploadPage() {
               <div>
                 <label className="label-sm block mb-1.5">Target Surgery Date</label>
                 <input type="datetime-local" className="input-base" data-testid="scheduled-date" />
+              </div>
+            </div>
+
+            {/* Study Classification (multi-study support) */}
+            <div className="border border-slate-700 rounded-md p-3 bg-slate-900">
+              <p className="text-xs font-semibold text-slate-300 mb-2">Study Classification</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label-sm block mb-1.5">Study Type</label>
+                  <select
+                    value={studyType}
+                    onChange={e => setStudyType(e.target.value)}
+                    className="select-base"
+                    data-testid="study-type-select"
+                  >
+                    <option value="pre_op">Pre-operative</option>
+                    <option value="post_op">Post-operative</option>
+                    <option value="follow_up">Follow-up</option>
+                    <option value="intra_op">Intra-operative</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label-sm block mb-1.5">Study Label (optional)</label>
+                  <input
+                    type="text"
+                    value={studyLabel}
+                    onChange={e => setStudyLabel(e.target.value)}
+                    placeholder="e.g., Initial CT, 6-week follow-up"
+                    className="input-base"
+                    data-testid="study-label-input"
+                  />
+                </div>
               </div>
             </div>
 

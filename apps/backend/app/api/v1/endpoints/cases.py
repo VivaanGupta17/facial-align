@@ -8,7 +8,9 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,8 +19,10 @@ from app.core.logging import get_logger
 from app.core.security import CurrentUser, audit_logger, get_current_user, require_surgeon
 from app.db.database import get_db_session
 from app.models.case import CaseStatus, CaseType, SurgicalCase
+from app.models.case_study import CaseStudy
 from app.models.plan import ReductionPlan
 from app.models.segmentation import SegmentationResult
+from app.models.study import ImagingStudy
 from app.schemas.case import (
     CaseCreate,
     CaseListFilters,
@@ -26,6 +30,9 @@ from app.schemas.case import (
     CaseListResponse,
     CaseResponse,
     CaseStatusTransition,
+    CaseStudyCreate,
+    CaseStudyInfo,
+    CaseStudyUpdate,
     CaseUpdate,
     PlanSummary,
     SegmentationSummary,
@@ -101,6 +108,31 @@ async def _build_case_response(
         )
     ).scalar_one()
 
+    # Fetch case-study links with study metadata
+    cs_stmt = (
+        select(CaseStudy, ImagingStudy)
+        .outerjoin(ImagingStudy, CaseStudy.study_id == ImagingStudy.id)
+        .where(CaseStudy.case_id == case.id)
+        .order_by(CaseStudy.display_order, CaseStudy.created_at)
+    )
+    cs_rows = (await db.execute(cs_stmt)).all()
+    studies_list = [
+        CaseStudyInfo(
+            id=cs.id,
+            study_id=cs.study_id,
+            study_role=cs.study_role,
+            study_label=cs.study_label,
+            is_primary=cs.is_primary,
+            display_order=cs.display_order,
+            created_at=cs.created_at,
+            study_uid=study.study_uid if study else None,
+            modality=study.modality if study else None,
+            acquisition_date=study.acquisition_date if study else None,
+            ingestion_status=study.ingestion_status if study else None,
+        )
+        for cs, study in cs_rows
+    ]
+
     return CaseResponse(
         id=case.id,
         case_number=case.case_number,
@@ -125,6 +157,7 @@ async def _build_case_response(
         latest_plan=plan_summary,
         segmentation_count=seg_count,
         plan_count=plan_count,
+        studies=studies_list,
     )
 
 
@@ -369,4 +402,211 @@ async def archive_case(
         resource_type="case",
         resource_id=str(case_id),
         ip_address="unknown",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Case-Study CRUD (multi-study per patient)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{case_id}/studies", response_model=CaseStudyInfo, status_code=status.HTTP_201_CREATED)
+async def attach_study(
+    case_id: uuid.UUID,
+    payload: CaseStudyCreate,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> CaseStudyInfo:
+    """Attach an imaging study to a case."""
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+
+    # Verify study exists
+    study = (
+        await db.execute(select(ImagingStudy).where(ImagingStudy.id == payload.study_id))
+    ).scalar_one_or_none()
+    if not study:
+        raise HTTPException(status_code=404, detail=f"Study {payload.study_id} not found")
+
+    # Check for duplicate
+    existing = (
+        await db.execute(
+            select(CaseStudy).where(
+                CaseStudy.case_id == case_id,
+                CaseStudy.study_id == payload.study_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Study already attached to this case")
+
+    # If marking as primary, clear others
+    if payload.is_primary:
+        existing_primaries = (
+            await db.execute(
+                select(CaseStudy).where(CaseStudy.case_id == case_id, CaseStudy.is_primary.is_(True))
+            )
+        ).scalars().all()
+        for ep in existing_primaries:
+            ep.is_primary = False
+
+    cs = CaseStudy(
+        case_id=str(case_id),
+        study_id=str(payload.study_id),
+        study_role=payload.study_role,
+        study_label=payload.study_label,
+        is_primary=payload.is_primary,
+    )
+    db.add(cs)
+    await db.flush()
+
+    audit_logger.log_phi_access(
+        user_id=current_user.user_id,
+        action="CREATE",
+        resource_type="case_study",
+        resource_id=str(cs.id),
+        ip_address="unknown",
+        additional_context={"case_id": str(case_id), "study_id": str(payload.study_id)},
+    )
+
+    return CaseStudyInfo(
+        id=cs.id,
+        study_id=cs.study_id,
+        study_role=cs.study_role,
+        study_label=cs.study_label,
+        is_primary=cs.is_primary,
+        display_order=cs.display_order,
+        created_at=cs.created_at,
+        study_uid=study.study_uid,
+        modality=study.modality,
+        acquisition_date=study.acquisition_date,
+        ingestion_status=study.ingestion_status,
+    )
+
+
+@router.get("/{case_id}/studies", response_model=List[CaseStudyInfo])
+async def list_case_studies(
+    case_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> List[CaseStudyInfo]:
+    """List all studies attached to a case."""
+    stmt = (
+        select(CaseStudy, ImagingStudy)
+        .outerjoin(ImagingStudy, CaseStudy.study_id == ImagingStudy.id)
+        .where(CaseStudy.case_id == case_id)
+        .order_by(CaseStudy.display_order, CaseStudy.created_at)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        CaseStudyInfo(
+            id=cs.id,
+            study_id=cs.study_id,
+            study_role=cs.study_role,
+            study_label=cs.study_label,
+            is_primary=cs.is_primary,
+            display_order=cs.display_order,
+            created_at=cs.created_at,
+            study_uid=study.study_uid if study else None,
+            modality=study.modality if study else None,
+            acquisition_date=study.acquisition_date if study else None,
+            ingestion_status=study.ingestion_status if study else None,
+        )
+        for cs, study in rows
+    ]
+
+
+@router.delete("/{case_id}/studies/{study_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def detach_study(
+    case_id: uuid.UUID,
+    study_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> None:
+    """Detach a study from a case."""
+    cs = (
+        await db.execute(
+            select(CaseStudy).where(
+                CaseStudy.case_id == case_id,
+                CaseStudy.study_id == study_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not cs:
+        raise HTTPException(status_code=404, detail="Study not attached to this case")
+
+    await db.delete(cs)
+
+    audit_logger.log_phi_access(
+        user_id=current_user.user_id,
+        action="DELETE",
+        resource_type="case_study",
+        resource_id=str(cs.id),
+        ip_address="unknown",
+        additional_context={"case_id": str(case_id), "study_id": str(study_id)},
+    )
+
+
+@router.patch("/{case_id}/studies/{study_id}", response_model=CaseStudyInfo)
+async def update_case_study(
+    case_id: uuid.UUID,
+    study_id: uuid.UUID,
+    payload: CaseStudyUpdate,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> CaseStudyInfo:
+    """Update role, label, or primary flag for a case-study link."""
+    cs = (
+        await db.execute(
+            select(CaseStudy).where(
+                CaseStudy.case_id == case_id,
+                CaseStudy.study_id == study_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not cs:
+        raise HTTPException(status_code=404, detail="Study not attached to this case")
+
+    if payload.study_role is not None:
+        cs.study_role = payload.study_role
+    if payload.study_label is not None:
+        cs.study_label = payload.study_label
+    if payload.is_primary is not None:
+        if payload.is_primary:
+            # Clear other primaries
+            others = (
+                await db.execute(
+                    select(CaseStudy).where(
+                        CaseStudy.case_id == case_id,
+                        CaseStudy.is_primary.is_(True),
+                        CaseStudy.id != cs.id,
+                    )
+                )
+            ).scalars().all()
+            for o in others:
+                o.is_primary = False
+        cs.is_primary = payload.is_primary
+
+    await db.flush()
+
+    # Fetch study for metadata
+    study = (
+        await db.execute(select(ImagingStudy).where(ImagingStudy.id == study_id))
+    ).scalar_one_or_none()
+
+    return CaseStudyInfo(
+        id=cs.id,
+        study_id=cs.study_id,
+        study_role=cs.study_role,
+        study_label=cs.study_label,
+        is_primary=cs.is_primary,
+        display_order=cs.display_order,
+        created_at=cs.created_at,
+        study_uid=study.study_uid if study else None,
+        modality=study.modality if study else None,
+        acquisition_date=study.acquisition_date if study else None,
+        ingestion_status=study.ingestion_status if study else None,
     )

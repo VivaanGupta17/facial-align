@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 
@@ -10,6 +11,39 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
+
+
+class CaseStatus(str, enum.Enum):
+    CREATED = "CREATED"
+    DICOM_PROCESSING = "DICOM_PROCESSING"
+    SEGMENTED = "SEGMENTED"
+    PLANNING = "PLANNING"
+    PLANNED = "PLANNED"
+    REVIEWED = "REVIEWED"
+    APPROVED = "APPROVED"
+    ARCHIVED = "ARCHIVED"
+    FAILED = "FAILED"
+
+
+class CaseType(str, enum.Enum):
+    TRAUMA = "TRAUMA"
+    ORTHOGNATHIC = "ORTHOGNATHIC"
+    RECONSTRUCTION = "RECONSTRUCTION"
+    TMJ = "TMJ"
+    OTHER = "OTHER"
+
+
+VALID_TRANSITIONS: dict[CaseStatus, set[CaseStatus]] = {
+    CaseStatus.CREATED: {CaseStatus.DICOM_PROCESSING, CaseStatus.FAILED, CaseStatus.ARCHIVED},
+    CaseStatus.DICOM_PROCESSING: {CaseStatus.SEGMENTED, CaseStatus.FAILED},
+    CaseStatus.SEGMENTED: {CaseStatus.PLANNING, CaseStatus.FAILED, CaseStatus.ARCHIVED},
+    CaseStatus.PLANNING: {CaseStatus.PLANNED, CaseStatus.FAILED},
+    CaseStatus.PLANNED: {CaseStatus.REVIEWED, CaseStatus.PLANNING, CaseStatus.ARCHIVED},
+    CaseStatus.REVIEWED: {CaseStatus.APPROVED, CaseStatus.PLANNING, CaseStatus.ARCHIVED},
+    CaseStatus.APPROVED: {CaseStatus.ARCHIVED},
+    CaseStatus.ARCHIVED: set(),
+    CaseStatus.FAILED: {CaseStatus.CREATED, CaseStatus.ARCHIVED},
+}
 
 
 class SurgicalCase(Base):
@@ -54,3 +88,15 @@ class SurgicalCase(Base):
     study = relationship("ImagingStudy", back_populates="surgical_cases")
     segmentation_results = relationship("SegmentationResult", back_populates="case")
     reduction_plans = relationship("ReductionPlan", back_populates="case")
+    case_studies = relationship("CaseStudy", back_populates="case", cascade="all, delete-orphan")
+
+    def transition_to(self, new_status: CaseStatus) -> None:
+        """Validate and apply a status transition."""
+        current = CaseStatus(self.status)
+        allowed = VALID_TRANSITIONS.get(current, set())
+        if new_status not in allowed:
+            raise ValueError(
+                f"Cannot transition from {current.value} to {new_status.value}. "
+                f"Allowed: {[s.value for s in allowed]}"
+            )
+        self.status = new_status
