@@ -127,7 +127,7 @@ export default function Sidebar() {
             <span className="text-2xs font-semibold uppercase tracking-wider text-cyan-500">Active Case</span>
           </div>
           <p className="text-sm font-mono font-semibold text-slate-100">{activeCase.caseNumber}</p>
-          <p className="text-xs text-slate-400 capitalize mt-0.5">{activeCase.type.replace(/_/g, ' ')}</p>
+          <p className="text-xs text-slate-400 capitalize mt-0.5">{activeCase.caseType.replace(/_/g, ' ')}</p>
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { ChevronRight, Cpu, AlertCircle, CheckCircle, RefreshCw, Bell, User, Settings, LogOut } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -81,6 +81,7 @@ function CaseStatusBadge() {
 }
 
 export default function TopBar() {
+  const navigate = useNavigate()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const { data: health } = useQuery({
     queryKey: ['system-health'],
@@ -171,7 +172,10 @@ export default function TopBar() {
                 <Settings size={14} /> Preferences
               </button>
               <div className="border-t border-slate-700 mt-1 pt-1">
-                <button className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-red-400 hover:bg-slate-700 transition-colors">
+                <button
+                  onClick={() => { localStorage.removeItem('auth_token'); localStorage.removeItem('auth_user'); navigate('/login') }}
+                  className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-red-400 hover:bg-slate-700 transition-colors"
+                >
                   <LogOut size={14} /> Sign out
                 </button>
               </div>

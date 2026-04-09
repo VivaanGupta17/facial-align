@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
-import StatusBadge, { PriorityBadge } from '../components/common/StatusBadge'
-import { PageLoading, ErrorState, EmptyState, TableSkeleton } from '../components/common/LoadingOverlay'
+import StatusBadge from '../components/common/StatusBadge'
+import { ErrorState, EmptyState, TableSkeleton } from '../components/common/LoadingOverlay'
 import type { CaseStatus, CaseType } from '../types/medical'
 
 const STATUS_OPTIONS: { value: CaseStatus | ''; label: string }[] = [
@@ -37,7 +37,12 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-type SortKey = 'caseNumber' | 'type' | 'status' | 'priority' | 'updatedAt' | 'scheduledDate'
+function truncateId(id: string) {
+  if (!id) return '—'
+  return id.length > 8 ? `${id.slice(0, 8)}...` : id
+}
+
+type SortKey = 'caseNumber' | 'status' | 'updatedAt'
 
 export default function CaseListPage() {
   const navigate = useNavigate()
@@ -53,7 +58,7 @@ export default function CaseListPage() {
     status: statusFilter ? [statusFilter] : undefined,
     type: typeFilter ? [typeFilter] : undefined,
     search: search || undefined,
-    sortBy: sortKey === 'caseNumber' ? 'caseNumber' : sortKey === 'updatedAt' ? 'updatedAt' : sortKey === 'scheduledDate' ? 'scheduledDate' : 'updatedAt',
+    sortBy: sortKey === 'caseNumber' ? 'caseNumber' : 'updatedAt',
     sortOrder: sortDir,
   })
 
@@ -157,9 +162,6 @@ export default function CaseListPage() {
               <label className="label-sm block mb-1">Surgeon</label>
               <select className="select-base" data-testid="surgeon-filter">
                 <option>All Surgeons</option>
-                <option>Dr. Emily Chen</option>
-                <option>Dr. Marcus Reid</option>
-                <option>Dr. Aisha Okonkwo</option>
               </select>
             </div>
           </div>
@@ -181,30 +183,17 @@ export default function CaseListPage() {
                     </button>
                   </th>
                   <th>Patient ID</th>
-                  <th>
-                    <button onClick={() => handleSort('type')} className="flex items-center gap-1 hover:text-slate-300">
-                      Type <SortIcon k="type" />
-                    </button>
-                  </th>
-                  <th>
-                    <button onClick={() => handleSort('priority')} className="flex items-center gap-1 hover:text-slate-300">
-                      Priority <SortIcon k="priority" />
-                    </button>
-                  </th>
+                  <th>Type</th>
                   <th>
                     <button onClick={() => handleSort('status')} className="flex items-center gap-1 hover:text-slate-300">
                       Status <SortIcon k="status" />
                     </button>
                   </th>
-                  <th>Primary Surgeon</th>
+                  <th>Surgeon</th>
+                  <th>Seg. Status</th>
                   <th>
                     <button onClick={() => handleSort('updatedAt')} className="flex items-center gap-1 hover:text-slate-300">
                       Updated <SortIcon k="updatedAt" />
-                    </button>
-                  </th>
-                  <th>
-                    <button onClick={() => handleSort('scheduledDate')} className="flex items-center gap-1 hover:text-slate-300">
-                      Scheduled <SortIcon k="scheduledDate" />
                     </button>
                   </th>
                   <th></th>
@@ -212,10 +201,10 @@ export default function CaseListPage() {
               </thead>
               <tbody>
                 {isLoading ? (
-                  <TableSkeleton rows={8} cols={9} />
+                  <TableSkeleton rows={8} cols={8} />
                 ) : data?.items.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>
+                    <td colSpan={8}>
                       <EmptyState
                         title="No cases found"
                         description="Try adjusting filters or create a new case."
@@ -227,46 +216,39 @@ export default function CaseListPage() {
                       />
                     </td>
                   </tr>
-                ) : data?.items.map(c => {
-                  const primarySurgeon = c.assignments.find(a => a.role === 'primary')?.surgeonName ?? 'Unassigned'
-                  return (
-                    <tr
-                      key={c.id}
-                      onClick={() => navigate(`/cases/${c.id}`)}
-                      className="cursor-pointer"
-                      data-testid={`case-row-${c.id}`}
-                    >
-                      <td>
-                        <span className="font-mono text-sm font-semibold text-slate-100">{c.caseNumber}</span>
-                      </td>
-                      <td>
-                        <span className="font-mono text-xs text-slate-400">
-                          {/* anonymizedId pulled from patientId for mock */}
-                          {`FA-2024-${c.patientId.replace('pt-0', '0').padStart(3, '0')}`}
-                        </span>
-                      </td>
-                      <td><span className="text-xs text-slate-300">{fmtCaseType(c.type)}</span></td>
-                      <td><PriorityBadge priority={c.priority} /></td>
-                      <td><StatusBadge status={c.status} size="sm" /></td>
-                      <td><span className="text-xs text-slate-400">{primarySurgeon}</span></td>
-                      <td><span className="text-xs font-mono text-slate-500">{fmtDate(c.updatedAt)}</span></td>
-                      <td>
-                        <span className="text-xs font-mono text-slate-500">
-                          {c.scheduledDate ? fmtDate(c.scheduledDate) : '—'}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); navigate(`/cases/${c.id}`) }}
-                          className="text-xs text-cyan-400 hover:text-cyan-300 font-medium"
-                          data-testid={`open-case-${c.id}`}
-                        >
-                          Open →
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
+                ) : data?.items.map(c => (
+                  <tr
+                    key={c.id}
+                    onClick={() => navigate(`/cases/${c.id}`)}
+                    className="cursor-pointer"
+                    data-testid={`case-row-${c.id}`}
+                  >
+                    <td>
+                      <span className="font-mono text-sm font-semibold text-slate-100">{c.caseNumber}</span>
+                    </td>
+                    <td>
+                      <span className="font-mono text-xs text-slate-400">{truncateId(c.patientId)}</span>
+                    </td>
+                    <td><span className="text-xs text-slate-300">{fmtCaseType(c.caseType)}</span></td>
+                    <td><StatusBadge status={c.status} size="sm" /></td>
+                    <td><span className="text-xs text-slate-400">{c.surgeonId ? truncateId(c.surgeonId) : 'Unassigned'}</span></td>
+                    <td>
+                      <span className="text-xs text-slate-400 font-mono">
+                        {c.latestSegmentationStatus ?? '—'}
+                      </span>
+                    </td>
+                    <td><span className="text-xs font-mono text-slate-500">{fmtDate(c.updatedAt)}</span></td>
+                    <td>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate(`/cases/${c.id}`) }}
+                        className="text-xs text-cyan-400 hover:text-cyan-300 font-medium"
+                        data-testid={`open-case-${c.id}`}
+                      >
+                        Open →
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

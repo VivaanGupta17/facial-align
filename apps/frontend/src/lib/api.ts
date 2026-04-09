@@ -6,6 +6,7 @@
 
 import type {
   SurgicalCase,
+  CaseListItem,
   Study,
   SegmentationResult,
   ReductionPlan,
@@ -91,23 +92,25 @@ export interface CasesListParams {
   search?: string
   dateFrom?: string
   dateTo?: string
-  sortBy?: 'updatedAt' | 'createdAt' | 'scheduledDate' | 'caseNumber'
+  sortBy?: 'updatedAt' | 'createdAt' | 'caseNumber'
   sortOrder?: 'asc' | 'desc'
 }
 
 export const casesApi = {
   /** List all cases with optional filtering */
-  list: async (params: CasesListParams = {}): Promise<PaginatedResponse<SurgicalCase>> => {
-    return fetchApi<PaginatedResponse<SurgicalCase>>('/cases', {
+  list: async (params: CasesListParams = {}): Promise<PaginatedResponse<CaseListItem>> => {
+    return fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
       params: {
         page: params.page,
-        pageSize: params.pageSize,
+        page_size: params.pageSize,
         status: params.status?.join(','),
-        caseType: params.type?.join(','),
-        surgeonId: params.surgeonId,
+        case_type: params.type?.join(','),
+        surgeon_id: params.surgeonId,
         search: params.search,
-        createdAfter: params.dateFrom,
-        createdBefore: params.dateTo,
+        created_after: params.dateFrom,
+        created_before: params.dateTo,
+        sort_by: params.sortBy,
+        sort_order: params.sortOrder,
       },
     })
   },
@@ -124,10 +127,17 @@ export const casesApi = {
   update: async (caseId: string, data: Partial<SurgicalCase>): Promise<SurgicalCase> =>
     fetchApi<SurgicalCase>(`/cases/${caseId}`, { method: 'PATCH', body: data }),
 
+  /** Transition case status */
+  transitionStatus: async (caseId: string, targetStatus: string): Promise<SurgicalCase> =>
+    fetchApi<SurgicalCase>(`/cases/${caseId}/status`, {
+      method: 'POST',
+      body: { targetStatus },
+    }),
+
   /** Get recent cases for dashboard */
-  getRecent: async (limit = 10): Promise<SurgicalCase[]> => {
-    const resp = await fetchApi<PaginatedResponse<SurgicalCase>>('/cases', {
-      params: { pageSize: limit, sortBy: 'updatedAt', sortOrder: 'desc' },
+  getRecent: async (limit = 10): Promise<CaseListItem[]> => {
+    const resp = await fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+      params: { page_size: limit, sort_by: 'updatedAt', sort_order: 'desc' },
     })
     return resp.items
   },
@@ -137,22 +147,43 @@ export const casesApi = {
 // Dashboard API
 // ---------------------------
 
+const ACTIVE_STATUSES: CaseStatus[] = [
+  'pending_upload', 'uploading', 'processing', 'segmentation_in_progress',
+  'segmentation_review', 'planning', 'review',
+]
+const PENDING_SEG_STATUSES: CaseStatus[] = [
+  'pending_upload', 'uploading', 'processing', 'segmentation_in_progress',
+]
+const REVIEW_STATUSES: CaseStatus[] = ['review', 'segmentation_review']
+
 export const dashboardApi = {
-  /** Get dashboard statistics (aggregated from cases until dedicated endpoint exists) */
+  /** Compute dashboard statistics from real case data */
   getStats: async (): Promise<DashboardStats> => {
-    const cases = await fetchApi<PaginatedResponse<SurgicalCase>>('/cases', {
-      params: { pageSize: 1 },
-    })
-    // Minimal stats from what the cases list provides
+    const [allCases, reviewCases] = await Promise.all([
+      fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+        params: { page_size: 1 },
+      }),
+      fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+        params: { page_size: 1, status: REVIEW_STATUSES.join(',') },
+      }),
+    ])
+
+    const totalActive = allCases.total
+    const awaitingReview = reviewCases.total
+
+    // Estimate pending segmentation from total minus review/completed
+    const pendingSegmentation = Math.max(0, totalActive - awaitingReview)
+
     return {
-      totalCases: cases.total,
-      activeCases: 0,
-      pendingSegmentations: 0,
-      completedPlans: 0,
-      averageConfidence: 0,
-      casesThisWeek: 0,
-      casesThisMonth: 0,
-    } as DashboardStats
+      activeCases: totalActive,
+      activeCasesDelta: 0,
+      pendingSegmentation,
+      pendingSegmentationDelta: 0,
+      awaitingReview,
+      awaitingReviewDelta: 0,
+      completedThisMonth: 0,
+      completedThisMonthDelta: 0,
+    }
   },
 
   /** Get system health */
@@ -210,8 +241,8 @@ export const studiesApi = {
   },
 
   /** Get study metadata */
-  getMetadata: async (studyId: string): Promise<Study> =>
-    fetchApi<Study>(`/dicom/studies/${studyId}`),
+  getMetadata: async (studyId: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/dicom/studies/${studyId}/metadata`),
 }
 
 // ---------------------------
@@ -222,9 +253,6 @@ export const segmentationApi = {
   /** Get the latest segmentation result for a case */
   getResult: async (caseId: string): Promise<SegmentationResult> => {
     const results = await fetchApi<SegmentationResult[]>(`/segmentation/cases/${caseId}`)
-    // Pick the latest completed result, or the most recent if none completed
-    const completed = results.filter((r: SegmentationResult) => r.status === 'completed')
-    if (completed.length > 0) return completed[completed.length - 1]
     if (results.length > 0) return results[results.length - 1]
     throw new Error('No segmentation results found')
   },
@@ -271,10 +299,7 @@ export const planningApi = {
   getPlan: async (planId: string): Promise<ReductionPlan> =>
     fetchApi<ReductionPlan>(`/planning/${planId}`),
 
-  /**
-   * Generate a new reduction plan.
-   * Returns job info (202 async) — poll /jobs/{jobId} or listen via WebSocket.
-   */
+  /** Generate a new reduction plan */
   generatePlan: async (
     caseId: string
   ): Promise<{ jobId: string; planId: string }> =>

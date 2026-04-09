@@ -84,7 +84,6 @@ export interface BoundingBox {
 
 export interface Patient {
   id: string
-  /** Anonymized patient identifier — never store real name */
   anonymizedId: string
   age: number
   sex: 'M' | 'F' | 'O'
@@ -127,52 +126,49 @@ export interface Study {
 }
 
 // ---------------------------
-// Surgical Case
+// Surgical Case — matches backend CaseResponse
 // ---------------------------
-
-export interface CaseAssignment {
-  surgeonId: string
-  surgeonName: string
-  role: 'primary' | 'assistant' | 'reviewer'
-  assignedAt: string
-}
-
-export interface CaseNote {
-  id: string
-  authorId: string
-  authorName: string
-  content: string
-  createdAt: string
-  editedAt?: string
-  tags: string[]
-}
-
-export interface CaseTimelineEvent {
-  id: string
-  event: string
-  description: string
-  performedBy: string
-  performedAt: string
-  metadata?: Record<string, unknown>
-}
 
 export interface SurgicalCase {
   id: string
   caseNumber: string
-  studyId: string
   patientId: string
-  type: CaseType
+  studyId: string
+  caseType: CaseType
   status: CaseStatus
-  priority: 'routine' | 'urgent' | 'stat'
-  assignments: CaseAssignment[]
-  notes: CaseNote[]
-  timeline: CaseTimelineEvent[]
+  surgeonId: string | null
+  reviewerId: string | null
+  fractureClassification: string | null
+  plannedProcedure: string | null
+  diagnosisCodes: string[] | null
+  targetSurgeryDate: string | null
+  teamIds: string[] | null
+  currentTaskId: string | null
+  lastError: string | null
   createdAt: string
   updatedAt: string
-  scheduledDate?: string
-  completedAt?: string
-  segmentationJobId?: string
-  currentPlanId?: string
+  approvedAt: string | null
+  createdBy: string | null
+  latestSegmentation: string | null
+  latestPlan: string | null
+  segmentationCount: number
+  planCount: number
+  allowedTransitions: string[]
+}
+
+/** Lightweight item returned by the list endpoint */
+export interface CaseListItem {
+  id: string
+  caseNumber: string
+  patientId: string
+  caseType: CaseType
+  status: CaseStatus
+  surgeonId: string | null
+  fractureClassification: string | null
+  latestSegmentationStatus: string | null
+  latestPlanConfidence: number | null
+  createdAt: string
+  updatedAt: string
 }
 
 // ---------------------------
@@ -197,7 +193,6 @@ export interface SegmentedStructure {
   color: string // hex
   opacity: number // 0–1
   status: SegmentationStatus
-  /** Fragments within this structure (e.g. fractured pieces) */
   fragmentCount?: number
 }
 
@@ -226,7 +221,6 @@ export interface FragmentTransform {
   displayName: string
   baseTransform: Transform3D
   currentTransform: Transform3D
-  /** AI-proposed optimal transform */
   suggestedTransform?: Transform3D
   suggestionConfidence?: number
   isAligned: boolean
@@ -427,6 +421,7 @@ export interface PaginatedResponse<T> {
   total: number
   page: number
   pageSize: number
+  pages: number
   hasMore: boolean
 }
 
@@ -461,11 +456,10 @@ export interface DashboardStats {
 export interface RecentCaseRow {
   id: string
   caseNumber: string
-  anonymizedPatientId: string
-  type: CaseType
+  patientId: string
+  caseType: CaseType
   status: CaseStatus
-  priority: 'routine' | 'urgent' | 'stat'
-  primarySurgeon: string
+  surgeonId: string | null
   updatedAt: string
-  scheduledDate?: string
+  targetSurgeryDate?: string | null
 }

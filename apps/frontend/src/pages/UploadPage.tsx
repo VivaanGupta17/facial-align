@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Upload, FileText, ChevronRight, Check, AlertCircle, X, Plus } from 'lucide-react'
-import { studiesApi } from '../lib/api'
+import { studiesApi, casesApi } from '../lib/api'
 import { Spinner } from '../components/common/LoadingOverlay'
 
 type Step = 1 | 2 | 3 | 4
@@ -13,24 +13,12 @@ const STEPS = [
   { n: 4 as Step, label: 'Processing' },
 ]
 
-const MOCK_DICOM_TAGS = [
-  { tag: '(0010,0020)', name: 'Patient ID', value: 'Anonymized — FA-2024-XXXX', sensitive: false },
-  { tag: '(0008,0060)', name: 'Modality', value: 'CT', sensitive: false },
-  { tag: '(0008,103E)', name: 'Series Description', value: 'CT Maxillofacial w/o contrast', sensitive: false },
-  { tag: '(0018,0050)', name: 'Slice Thickness', value: '0.625 mm', sensitive: false },
-  { tag: '(0028,0030)', name: 'Pixel Spacing', value: '0.488 \\ 0.488 mm', sensitive: false },
-  { tag: '(0028,0010)', name: 'Rows', value: '512', sensitive: false },
-  { tag: '(0028,0011)', name: 'Columns', value: '512', sensitive: false },
-  { tag: '(0020,0013)', name: 'Instance Number', value: '1 – 412 (412 slices)', sensitive: false },
-  { tag: '(0018,0080)', name: 'kVp', value: '120 kV', sensitive: false },
-  { tag: '(0018,1152)', name: 'Exposure', value: '280 mAs', sensitive: false },
-  { tag: '(0008,0022)', name: 'Acquisition Date', value: '2024-11-15', sensitive: false },
-  { tag: '(0008,0023)', name: 'Content Date', value: '2024-11-15', sensitive: false },
-  { tag: '(0010,0030)', name: 'Patient Birth Date', value: '⚠ STRIPPED — Not stored', sensitive: true },
-  { tag: '(0010,0010)', name: 'Patient Name', value: '⚠ STRIPPED — Anonymized', sensitive: true },
-  { tag: '(0008,0090)', name: 'Referring Physician', value: 'Dr. Chen', sensitive: false },
-  { tag: '(0008,0080)', name: 'Institution Name', value: 'Metro General Hospital', sensitive: false },
-]
+interface DicomTag {
+  tag: string
+  name: string
+  value: string
+  sensitive: boolean
+}
 
 export default function UploadPage() {
   const navigate = useNavigate()
@@ -40,11 +28,14 @@ export default function UploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [studyId, setStudyId] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
+  const [dicomTags, setDicomTags] = useState<DicomTag[]>([])
+  const [metadataLoading, setMetadataLoading] = useState(false)
   const [caseType, setCaseType] = useState('mandible_fracture')
   const [notes, setNotes] = useState('')
-  const [surgeon, setSurgeon] = useState('Dr. Emily Chen')
-  const [priority, setPriority] = useState('routine')
+  const [createdCaseNumber, setCreatedCaseNumber] = useState<string | null>(null)
+  const [createdCaseId, setCreatedCaseId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -71,6 +62,29 @@ export default function UploadPage() {
     try {
       const result = await studiesApi.upload(files[0], setUploadProgress)
       setJobId(result.jobId)
+      setStudyId(result.studyId)
+
+      // Fetch real metadata from the study
+      setMetadataLoading(true)
+      try {
+        const metadata = await studiesApi.getMetadata(result.studyId)
+        const tags: DicomTag[] = Object.entries(metadata).map(([key, val]) => {
+          const sensitive = ['patientName', 'patientBirthDate', 'patient_name', 'patient_birth_date'].includes(key)
+          return {
+            tag: key,
+            name: key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim(),
+            value: sensitive ? 'STRIPPED — Anonymized' : String(val ?? ''),
+            sensitive,
+          }
+        })
+        setDicomTags(tags)
+      } catch {
+        // Metadata fetch is best-effort; proceed with empty tags
+        setDicomTags([])
+      } finally {
+        setMetadataLoading(false)
+      }
+
       setStep(2)
     } catch (err) {
       setUploadError('Upload failed. Please check your connection and try again.')
@@ -80,9 +94,17 @@ export default function UploadPage() {
   }
 
   const handleCreateCase = async () => {
-    setStep(4)
-    // Simulate processing initiated
-    await new Promise(r => setTimeout(r, 1000))
+    try {
+      const newCase = await casesApi.create({
+        caseType: caseType as any,
+        studyId: studyId ?? undefined,
+      })
+      setCreatedCaseNumber(newCase.caseNumber)
+      setCreatedCaseId(newCase.id)
+      setStep(4)
+    } catch {
+      setStep(4)
+    }
   }
 
   return (
@@ -203,7 +225,7 @@ export default function UploadPage() {
             </div>
           )}
 
-          {/* DEMO mode: allow proceeding with no files */}
+          {/* Actions */}
           <div className="flex justify-end gap-3">
             {files.length === 0 && (
               <button
@@ -233,41 +255,53 @@ export default function UploadPage() {
         <div className="space-y-4 animate-fade-in" data-testid="step-2">
           <div className="bg-slate-800 border border-slate-700 rounded-lg">
             <div className="panel-header">
-              <h3 className="panel-title">Parsed DICOM Tags</h3>
-              <span className="text-2xs font-mono text-slate-500">Job ID: {jobId}</span>
+              <h3 className="panel-title">Study Metadata</h3>
+              <div className="flex items-center gap-3">
+                {studyId && <span className="text-2xs font-mono text-slate-500">Study: {studyId.slice(0, 8)}...</span>}
+                {jobId && <span className="text-2xs font-mono text-slate-500">Job: {jobId.slice(0, 8)}...</span>}
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="data-table w-full">
-                <thead>
-                  <tr>
-                    <th className="w-36">Tag</th>
-                    <th>Attribute Name</th>
-                    <th>Value</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {MOCK_DICOM_TAGS.map(tag => (
-                    <tr key={tag.tag} data-testid={`dicom-tag-${tag.tag}`}>
-                      <td><span className="font-mono text-xs text-slate-400">{tag.tag}</span></td>
-                      <td><span className="text-sm text-slate-300">{tag.name}</span></td>
-                      <td>
-                        <span className={`text-sm font-mono ${tag.sensitive ? 'text-amber-400' : 'text-slate-200'}`}>
-                          {tag.value}
-                        </span>
-                      </td>
-                      <td>
-                        {tag.sensitive && (
-                          <span className="flex items-center gap-1 text-2xs text-amber-400">
-                            <AlertCircle size={10} /> PHI Removed
-                          </span>
-                        )}
-                      </td>
+            {metadataLoading ? (
+              <div className="flex items-center justify-center p-8">
+                <Spinner size={20} />
+                <span className="ml-3 text-sm text-slate-400">Loading metadata...</span>
+              </div>
+            ) : dicomTags.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="data-table w-full">
+                  <thead>
+                    <tr>
+                      <th className="w-48">Attribute</th>
+                      <th>Value</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {dicomTags.map(tag => (
+                      <tr key={tag.tag} data-testid={`dicom-tag-${tag.tag}`}>
+                        <td><span className="text-sm text-slate-300">{tag.name}</span></td>
+                        <td>
+                          <span className={`text-sm font-mono ${tag.sensitive ? 'text-amber-400' : 'text-slate-200'}`}>
+                            {tag.value}
+                          </span>
+                        </td>
+                        <td>
+                          {tag.sensitive && (
+                            <span className="flex items-center gap-1 text-2xs text-amber-400">
+                              <AlertCircle size={10} /> PHI Removed
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-8 text-center text-sm text-slate-500">
+                No additional metadata available for this study.
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 p-3 bg-emerald-950 border border-emerald-800 rounded-lg text-sm text-emerald-400" data-testid="phi-notice">
@@ -311,46 +345,9 @@ export default function UploadPage() {
               </div>
 
               <div>
-                <label className="label-sm block mb-1.5">Priority *</label>
-                <select
-                  value={priority}
-                  onChange={e => setPriority(e.target.value)}
-                  className="select-base"
-                  data-testid="priority-select"
-                >
-                  <option value="routine">Routine</option>
-                  <option value="urgent">Urgent</option>
-                  <option value="stat">STAT</option>
-                </select>
+                <label className="label-sm block mb-1.5">Target Surgery Date</label>
+                <input type="datetime-local" className="input-base" data-testid="scheduled-date" />
               </div>
-
-              <div>
-                <label className="label-sm block mb-1.5">Primary Surgeon *</label>
-                <select
-                  value={surgeon}
-                  onChange={e => setSurgeon(e.target.value)}
-                  className="select-base"
-                  data-testid="surgeon-select"
-                >
-                  <option>Dr. Emily Chen</option>
-                  <option>Dr. Marcus Reid</option>
-                  <option>Dr. Aisha Okonkwo</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="label-sm block mb-1.5">Reviewer</label>
-                <select className="select-base" data-testid="reviewer-select">
-                  <option>Dr. Marcus Reid</option>
-                  <option>Dr. Emily Chen</option>
-                  <option>Dr. Aisha Okonkwo</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="label-sm block mb-1.5">Scheduled Surgery Date</label>
-              <input type="datetime-local" className="input-base w-full max-w-xs" data-testid="scheduled-date" />
             </div>
 
             <div>
@@ -414,11 +411,9 @@ export default function UploadPage() {
 
             <div className="max-w-sm mx-auto bg-slate-800 border border-slate-700 rounded-lg p-4 text-left space-y-2">
               {[
-                { label: 'Case Number', value: 'FA-2024-0062' },
+                { label: 'Case Number', value: createdCaseNumber ?? 'Pending...' },
                 { label: 'Status', value: 'Segmentation Queued' },
-                { label: 'Primary Surgeon', value: surgeon },
                 { label: 'Case Type', value: caseType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) },
-                { label: 'Queue Position', value: '#3' },
               ].map(r => (
                 <div key={r.label} className="flex justify-between text-sm">
                   <span className="text-slate-400">{r.label}</span>
@@ -431,9 +426,15 @@ export default function UploadPage() {
               <button onClick={() => navigate('/dashboard')} className="btn-secondary">
                 Dashboard
               </button>
-              <button onClick={() => navigate('/cases')} className="btn-primary" data-testid="view-cases-btn">
-                View All Cases →
-              </button>
+              {createdCaseId ? (
+                <button onClick={() => navigate(`/cases/${createdCaseId}`)} className="btn-primary" data-testid="view-case-btn">
+                  View Case →
+                </button>
+              ) : (
+                <button onClick={() => navigate('/cases')} className="btn-primary" data-testid="view-cases-btn">
+                  View All Cases →
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -5,9 +5,9 @@ import {
   Clock, CheckCircle, Cpu, HardDrive, Activity, Layers,
 } from 'lucide-react'
 import { dashboardApi, casesApi } from '../lib/api'
-import StatusBadge, { PriorityBadge } from '../components/common/StatusBadge'
+import StatusBadge from '../components/common/StatusBadge'
 import { ErrorState, Skeleton } from '../components/common/LoadingOverlay'
-import type { RecentCaseRow, GpuStatus } from '../types/medical'
+import type { CaseListItem, GpuStatus } from '../types/medical'
 
 // ---------------------------
 // Format helpers
@@ -24,6 +24,11 @@ function fmtTime(iso: string) {
 
 function fmtCaseType(type: string) {
   return type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+}
+
+function truncateId(id: string) {
+  if (!id) return '—'
+  return id.length > 8 ? `${id.slice(0, 8)}...` : id
 }
 
 // ---------------------------
@@ -67,9 +72,9 @@ function GpuCard({ gpu }: { gpu: GpuStatus }) {
 }
 
 // ---------------------------
-// Recent Cases Table
+// Recent Cases Table (using CaseListItem)
 // ---------------------------
-function RecentCasesTable({ cases }: { cases: RecentCaseRow[] }) {
+function RecentCasesTable({ cases }: { cases: CaseListItem[] }) {
   const navigate = useNavigate()
 
   return (
@@ -80,11 +85,9 @@ function RecentCasesTable({ cases }: { cases: RecentCaseRow[] }) {
             <th>Case #</th>
             <th>Patient ID</th>
             <th>Type</th>
-            <th>Priority</th>
             <th>Status</th>
             <th>Surgeon</th>
             <th>Updated</th>
-            <th>Scheduled</th>
             <th></th>
           </tr>
         </thead>
@@ -100,27 +103,19 @@ function RecentCasesTable({ cases }: { cases: RecentCaseRow[] }) {
                 <span className="font-mono text-sm text-slate-100 font-semibold">{c.caseNumber}</span>
               </td>
               <td>
-                <span className="font-mono text-xs text-slate-400">{c.anonymizedPatientId}</span>
+                <span className="font-mono text-xs text-slate-400">{truncateId(c.patientId)}</span>
               </td>
               <td>
-                <span className="text-xs text-slate-300">{fmtCaseType(c.type)}</span>
-              </td>
-              <td>
-                <PriorityBadge priority={c.priority} />
+                <span className="text-xs text-slate-300">{fmtCaseType(c.caseType)}</span>
               </td>
               <td>
                 <StatusBadge status={c.status} size="sm" />
               </td>
               <td>
-                <span className="text-xs text-slate-400">{c.primarySurgeon}</span>
+                <span className="text-xs text-slate-400">{c.surgeonId ? truncateId(c.surgeonId) : 'Unassigned'}</span>
               </td>
               <td>
                 <span className="text-xs font-mono text-slate-500">{fmtTime(c.updatedAt)}</span>
-              </td>
-              <td>
-                <span className="text-xs font-mono text-slate-500">
-                  {c.scheduledDate ? new Date(c.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
-                </span>
               </td>
               <td>
                 <button
@@ -443,7 +438,7 @@ function TableSkeleton() {
     <>
       {Array(6).fill(0).map((_, i) => (
         <tr key={i} className="border-b border-slate-800">
-          {[28, 20, 32, 12, 24, 20, 12, 14, 8].map((w, j) => (
+          {[28, 20, 32, 24, 20, 12, 8].map((w, j) => (
             <td key={j} className="px-4 py-3">
               <div className={`h-4 bg-slate-700/60 rounded animate-pulse`} style={{ width: `${w * 4}px` }} />
             </td>
