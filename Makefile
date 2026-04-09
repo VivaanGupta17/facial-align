@@ -1,4 +1,6 @@
-.PHONY: help dev up down build test lint format clean setup
+.PHONY: help dev up down build logs logs-backend seed migrate test test-unit test-backend test-pipelines test-coverage lint format fe-dev fe-build dev-backend dev-worker install-frontend up-infra db-migrate db-revision db-reset download-models setup clean
+
+COMPOSE := docker compose -f infra/docker/docker-compose.yml
 
 # ── Facial Align Development Commands ────────────────────────
 
@@ -7,23 +9,25 @@ help: ## Show this help
 
 # ── Docker ───────────────────────────────────────────────────
 
+dev: up seed ## Start all services and seed demo data
+
 up: ## Start all services (PostgreSQL, Redis, MinIO, Backend, Frontend)
-	docker compose -f infra/docker/docker-compose.yml up -d
+	$(COMPOSE) up -d
 
 down: ## Stop all services
-	docker compose -f infra/docker/docker-compose.yml down
+	$(COMPOSE) down
 
 up-infra: ## Start only infrastructure (PostgreSQL, Redis, MinIO)
-	docker compose -f infra/docker/docker-compose.yml up -d postgres redis minio minio-init
+	$(COMPOSE) up -d postgres redis minio minio-init
 
 logs: ## Tail logs from all services
-	docker compose -f infra/docker/docker-compose.yml logs -f
+	$(COMPOSE) logs -f
 
 logs-backend: ## Tail backend logs
-	docker compose -f infra/docker/docker-compose.yml logs -f backend celery-worker
+	$(COMPOSE) logs -f backend celery-worker
 
 build: ## Build all Docker images
-	docker compose -f infra/docker/docker-compose.yml build
+	$(COMPOSE) build
 
 # ── Backend Development ──────────────────────────────────────
 
@@ -35,17 +39,43 @@ dev-worker: ## Run Celery worker in development mode
 
 # ── Frontend Development ─────────────────────────────────────
 
-dev-frontend: ## Run frontend in development mode
+fe-dev: ## Start frontend dev server
 	cd apps/frontend && npm run dev
+
+fe-build: ## Build frontend for production
+	cd apps/frontend && npm run build
+
+dev-frontend: fe-dev ## Alias for fe-dev
 
 install-frontend: ## Install frontend dependencies
 	cd apps/frontend && npm install
+
+# ── Database ─────────────────────────────────────────────────
+
+migrate: ## Run Alembic migrations (via Docker)
+	$(COMPOSE) exec backend alembic upgrade head
+
+db-migrate: ## Run Alembic migrations (local)
+	cd apps/backend && alembic upgrade head
+
+db-revision: ## Create a new migration (usage: make db-revision msg="description")
+	cd apps/backend && alembic revision --autogenerate -m "$(msg)"
+
+db-reset: ## Reset database (WARNING: destroys all data)
+	$(COMPOSE) exec postgres psql -U facial_align -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	$(MAKE) db-migrate
+
+seed: ## Seed demo data
+	$(COMPOSE) exec backend python -m scripts.seed_demo_data --db
 
 # ── Testing ──────────────────────────────────────────────────
 
 test: ## Run all tests
 	cd apps/backend && pytest tests/ -v --tb=short
 	cd apps/frontend && npm test 2>/dev/null || true
+
+test-unit: ## Run unit tests only
+	cd apps/backend && pytest tests/unit/ -v --tb=short
 
 test-backend: ## Run backend tests only
 	cd apps/backend && pytest tests/ -v --tb=short
@@ -58,24 +88,12 @@ test-coverage: ## Run tests with coverage report
 
 # ── Code Quality ─────────────────────────────────────────────
 
-lint: ## Run linters (ruff + mypy + eslint)
+lint: ## Run linters (ruff + mypy + tsc)
 	cd apps/backend && ruff check . && mypy app/ --ignore-missing-imports
 	cd apps/frontend && npx tsc --noEmit
 
 format: ## Auto-format code
 	cd apps/backend && ruff format . && ruff check --fix .
-
-# ── Database ─────────────────────────────────────────────────
-
-db-migrate: ## Run database migrations
-	cd apps/backend && alembic upgrade head
-
-db-revision: ## Create a new migration (usage: make db-revision msg="description")
-	cd apps/backend && alembic revision --autogenerate -m "$(msg)"
-
-db-reset: ## Reset database (WARNING: destroys all data)
-	docker compose -f infra/docker/docker-compose.yml exec postgres psql -U facial_align -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-	$(MAKE) db-migrate
 
 # ── ML / Models ──────────────────────────────────────────────
 

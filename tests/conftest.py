@@ -15,6 +15,14 @@ import numpy as np
 import pytest
 import pytest_asyncio
 
+# Optional imports for API test fixtures — gracefully degrade if not installed
+try:
+    import httpx
+    from httpx._transports.asgi import ASGITransport
+    _HTTPX_AVAILABLE = True
+except ImportError:
+    _HTTPX_AVAILABLE = False
+
 # ─── Async event loop ─────────────────────────────────────────────────────────
 
 
@@ -319,3 +327,54 @@ def sample_transform():
         ],
         translation_mm=[5.0, -2.0, 1.0],
     )
+
+
+# ─── FastAPI app + async HTTP client fixtures ─────────────────────────────────
+
+
+@pytest.fixture
+def app():
+    """Create a fresh FastAPI test application instance."""
+    from app.main import create_app
+    test_app = create_app()
+    return test_app
+
+
+@pytest_asyncio.fixture
+async def async_client(app):
+    """
+    Async HTTP client wired to the FastAPI app via ASGI transport.
+    No network required — requests go directly through the ASGI interface.
+    """
+    if not _HTTPX_AVAILABLE:
+        pytest.skip("httpx not installed")
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        yield client
+
+
+@pytest.fixture
+def auth_headers():
+    """
+    Return Authorization headers with a valid test JWT.
+    Uses the security module to mint a real token for a test surgeon user.
+    """
+    from app.core.security import create_access_token
+
+    token = create_access_token(user_id="test-surgeon-001", role="surgeon")
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def admin_auth_headers():
+    """
+    Return Authorization headers with a valid admin JWT.
+    """
+    from app.core.security import create_access_token
+
+    token = create_access_token(user_id="test-admin-001", role="admin")
+    return {"Authorization": f"Bearer {token}"}
