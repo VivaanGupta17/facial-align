@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Clock, User, FileText, Layers, Target, AlignCenter,
-  ClipboardCheck, History, AlertTriangle, Play, CheckCircle, XCircle,
+  ClipboardCheck, History, AlertTriangle, Play, CheckCircle, XCircle, Download,
 } from 'lucide-react'
 import { useCase } from '../hooks/useCases'
 import { useCaseStore } from '../stores/caseStore'
@@ -14,6 +14,7 @@ import SegmentationReview from '../components/planning/SegmentationReview'
 import ReductionWorkspace from '../components/planning/ReductionWorkspace'
 import OcclusionWorkspace from '../components/planning/OcclusionWorkspace'
 import SurgeonReview from '../components/planning/SurgeonReview'
+import ExportPanel from '../components/planning/ExportPanel'
 import { casesApi } from '../lib/api'
 import { useWebSocket, type WsMessage } from '../hooks/useWebSocket'
 import type { SurgicalCase } from '../types/medical'
@@ -342,6 +343,7 @@ export default function CaseDetailPage() {
   const { data: caseData, isLoading, error, refetch } = useCase(caseId ?? '')
   const { setActiveCase } = useCaseStore()
   const { addToast } = useToastStore()
+  const [showExportPanel, setShowExportPanel] = useState(false)
 
   // Job progress state for WebSocket
   const [jobProgress, setJobProgress] = useState<{ stage: string; progress: number } | null>(null)
@@ -439,7 +441,27 @@ export default function CaseDetailPage() {
       <div className="flex-1 overflow-auto">
         {activeTab === 'overview' && <OverviewTab caseData={caseData} />}
         {activeTab === 'segmentation' && <SegmentationReview caseId={caseData.id} />}
-        {activeTab === 'planning' && <ReductionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />}
+        {activeTab === 'planning' && (
+          <div className="relative h-full">
+            {caseData.latestPlan && (
+              <div className="absolute top-4 right-4 z-10">
+                {showExportPanel ? (
+                  <ExportPanel planId={caseData.latestPlan} onClose={() => setShowExportPanel(false)} />
+                ) : (
+                  <button
+                    onClick={() => setShowExportPanel(true)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-md bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium shadow-lg transition-colors"
+                    data-testid="export-stl-btn"
+                  >
+                    <Download size={16} />
+                    Export STL
+                  </button>
+                )}
+              </div>
+            )}
+            <ReductionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />
+          </div>
+        )}
         {activeTab === 'occlusion' && <OcclusionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />}
         {activeTab === 'review' && <SurgeonReview caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />}
         {activeTab === 'history' && <HistoryTab caseData={caseData} />}

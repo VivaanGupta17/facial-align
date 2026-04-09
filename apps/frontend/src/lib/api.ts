@@ -397,6 +397,62 @@ export const planningApi = {
 }
 
 // ---------------------------
+// Export API
+// ---------------------------
+
+export interface ExportFileInfo {
+  filename: string
+  exportType: string
+  downloadUrl: string
+  vertexCount: number
+  faceCount: number
+  volumeMm3: number
+  isWatertight: boolean
+  isPrintable: boolean
+}
+
+export interface ExportResponse {
+  planId: string
+  caseId: string
+  files: ExportFileInfo[]
+  totalExportTimeSeconds: number
+}
+
+export const exportApi = {
+  /** Trigger STL export for a plan */
+  exportPlan: async (
+    planId: string,
+    exportType = 'full_assembly',
+    stlFormat = 'binary',
+    structureName?: string,
+  ): Promise<ExportResponse> =>
+    fetchApi<ExportResponse>(`/planning/${planId}/export`, {
+      method: 'POST',
+      body: { exportType, stlFormat, structureName },
+    }),
+
+  /** Download an exported STL file via authenticated fetch + blob */
+  downloadStl: async (planId: string, filename: string): Promise<void> => {
+    const url = `${BASE_URL}/planning/${planId}/export/${filename}`
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+      },
+    })
+    if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`)
+    const blob = await res.blob()
+    const objUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(objUrl)
+  },
+}
+
+// ---------------------------
 // Review API
 // ---------------------------
 
