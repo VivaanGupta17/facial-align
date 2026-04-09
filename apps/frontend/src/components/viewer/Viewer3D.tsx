@@ -12,7 +12,8 @@ import type { SegmentedStructure, FragmentTransform, StructureLabel } from '../.
 // Structures panel (sidebar)
 // ---------------------------
 function StructuresPanel({ structures }: { structures: SegmentedStructure[] }) {
-  const { viewerState, setStructureVisible, setStructureOpacity, setStructureWireframe } = useViewerStore()
+  const { viewerState, setStructureVisible, setStructureOpacity, setStructureWireframe, setSelectedFragment } = useViewerStore()
+  const { selectedFragmentId, selectFragment } = usePlanningStore()
 
   return (
     <div className="w-56 bg-slate-900 border-l border-slate-800 flex flex-col" data-testid="structures-panel">
@@ -25,20 +26,30 @@ function StructuresPanel({ structures }: { structures: SegmentedStructure[] }) {
           const vis = viewerState.structureVisibility[s.label]
           if (!vis) return null
           return (
-            <div key={s.label} className="px-3 py-2 border-b border-slate-800 last:border-b-0" data-testid={`structure-row-${s.label}`}>
+            <div
+              key={s.label}
+              className={`px-3 py-2 border-b border-slate-800 last:border-b-0 cursor-pointer transition-colors ${
+                selectedFragmentId === s.label ? 'bg-cyan-950/30 border-l-2 border-l-cyan-500' : 'hover:bg-slate-800/50'
+              }`}
+              onClick={() => { setSelectedFragment(s.label); selectFragment(s.label) }}
+              data-testid={`structure-row-${s.label}`}
+            >
               <div className="flex items-center gap-2 mb-1.5">
                 {/* Visibility checkbox */}
                 <input
                   type="checkbox"
                   checked={vis.visible}
-                  onChange={e => setStructureVisible(s.label, e.target.checked)}
+                  onChange={e => { e.stopPropagation(); setStructureVisible(s.label, e.target.checked) }}
                   className="rounded border-slate-600 bg-slate-800"
                   data-testid={`vis-toggle-${s.label}`}
                 />
                 {/* Color swatch */}
                 <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
                 {/* Name */}
-                <span className="text-xs text-slate-300 flex-1 truncate" title={s.displayName}>{s.displayName}</span>
+                <span className={`text-xs flex-1 truncate ${selectedFragmentId === s.label ? 'text-cyan-300 font-semibold' : 'text-slate-300'}`} title={s.displayName}>{s.displayName}</span>
+                {selectedFragmentId === s.label && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" />
+                )}
               </div>
               {/* Opacity slider */}
               <div className="flex items-center gap-2 pl-5">
@@ -116,13 +127,16 @@ function MeasurementOverlay() {
 // ---------------------------
 function SceneContent({
   structures,
-  fragments,
+  fragments: fragmentsProp,
 }: {
   structures: SegmentedStructure[]
   fragments?: FragmentTransform[]
 }) {
   const { viewerState, setSelectedFragment } = useViewerStore()
-  const { selectFragment } = usePlanningStore()
+  const { selectFragment, currentPlan, selectedFragmentId: planSelectedId } = usePlanningStore()
+
+  // Use prop fragments if provided, otherwise read reactively from planningStore
+  const fragments = fragmentsProp ?? currentPlan?.fragmentTransforms
 
   const handleSelectFragment = useCallback((fragmentId: string) => {
     setSelectedFragment(fragmentId)

@@ -450,6 +450,20 @@ export const exportApi = {
     document.body.removeChild(a)
     URL.revokeObjectURL(objUrl)
   },
+
+  overrideMetric: async (
+    planId: string,
+    metricName: string,
+    targetValue: number,
+    notes?: string
+  ): Promise<ReductionPlan> => {
+    await delay(800) // Simulate re-optimization
+    return {
+      ...MOCK_REDUCTION_PLAN,
+      id: `plan-override-${Date.now()}`,
+      version: MOCK_REDUCTION_PLAN.version + 1,
+    }
+  },
 }
 
 // ---------------------------

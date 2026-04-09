@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { RotateCcw, Cpu, Check, X, Undo2, Redo2, Lock, Unlock, Move3d } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { RotateCcw, Cpu, Check, X, Undo2, Redo2, Lock, Unlock, Move3d, Save, XCircle } from 'lucide-react'
 import { usePlanningStore } from '../../stores/planningStore'
+import { planningApi } from '../../lib/api'
 import { ConfidenceBadge } from '../common/ConfidenceBar'
 import type { FragmentTransform } from '../../types/medical'
 
@@ -18,6 +19,44 @@ interface TransformSliderProps {
 
 function TransformSlider({ label, axis, value, min, max, step, unit, onChange, disabled }: TransformSliderProps) {
   const axisColor = { X: 'text-red-400', Y: 'text-emerald-400', Z: 'text-blue-400' }[axis]
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const isOutOfRange = (v: number) => v < min || v > max
+
+  const handleValueClick = () => {
+    if (disabled) return
+    setEditValue(value.toFixed(2))
+    setIsEditing(true)
+  }
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.select()
+    }
+  }, [isEditing])
+
+  const commitEdit = () => {
+    const parsed = parseFloat(editValue)
+    if (!isNaN(parsed)) {
+      const clamped = Math.max(min, Math.min(max, parsed))
+      onChange(clamped)
+    }
+    setIsEditing(false)
+  }
+
+  const cancelEdit = () => {
+    setIsEditing(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      commitEdit()
+    } else if (e.key === 'Escape') {
+      cancelEdit()
+    }
+  }
 
   return (
     <div className="flex items-center gap-2" data-testid={`transform-slider-${label}-${axis}`}>
@@ -30,16 +69,56 @@ function TransformSlider({ label, axis, value, min, max, step, unit, onChange, d
         disabled={disabled}
         className="flex-1"
       />
-      <span className="text-xs font-mono text-slate-300 w-16 text-right">
-        {value.toFixed(2)}<span className="text-slate-500"> {unit}</span>
-      </span>
+      {isEditing ? (
+        <input
+          ref={inputRef}
+          type="number"
+          value={editValue}
+          onChange={e => setEditValue(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={handleKeyDown}
+          step={step}
+          className={`w-20 text-xs font-mono text-right bg-slate-800 border rounded px-1 py-0.5 outline-none ${
+            isOutOfRange(parseFloat(editValue) || 0)
+              ? 'border-red-500 text-red-400'
+              : 'border-cyan-500 text-slate-100'
+          }`}
+          data-testid={`transform-input-${label}-${axis}`}
+        />
+      ) : (
+        <span
+          className="text-xs font-mono text-slate-300 w-20 text-right cursor-pointer hover:text-cyan-400 transition-colors"
+          onClick={handleValueClick}
+          title="Click to edit value"
+          data-testid={`transform-value-${label}-${axis}`}
+        >
+          {value.toFixed(2)}<span className="text-slate-500"> {unit}</span>
+        </span>
+      )}
     </div>
   )
 }
 
 export default function FragmentControls() {
-  const { currentPlan, selectedFragmentId, transformHistory, historyIndex, acceptAiSuggestion, resetFragment, undo, redo } = usePlanningStore()
+  const {
+    currentPlan,
+    selectedFragmentId,
+    transformHistory,
+    historyIndex,
+    isDirty,
+    updateFragmentTransform,
+    acceptAiSuggestion,
+    resetFragment,
+    undo,
+    redo,
+    markSaved,
+  } = usePlanningStore()
+
   const [activeSection, setActiveSection] = useState<'translate' | 'rotate'>('translate')
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [lastSavedTransforms, setLastSavedTransforms] = useState<Record<string, FragmentTransform> | null>(null)
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   if (!currentPlan || !selectedFragmentId) {
     return (
@@ -54,16 +133,88 @@ export default function FragmentControls() {
   const fragment = currentPlan.fragmentTransforms.find((f: FragmentTransform) => f.fragmentId === selectedFragmentId)
   if (!fragment) return null
 
+  // Store last saved state on first render
+  if (!lastSavedTransforms) {
+    const saved: Record<string, FragmentTransform> = {}
+    currentPlan.fragmentTransforms.forEach((f: FragmentTransform) => {
+      saved[f.fragmentId] = { ...f }
+    })
+    setLastSavedTransforms(saved)
+  }
+
   const t = fragment.currentTransform
   const hasSuggestion = !!fragment.suggestedTransform
 
+  // Debounced auto-save to backend
+  const debouncedSave = useCallback((fragmentId: string, transform: unknown) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+    }
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        await planningApi.updateFragmentTransform(currentPlan.id, fragmentId, transform)
+      } catch {
+        // Auto-save failures are silent — user can still explicitly save
+      }
+    }, 500)
+  }, [currentPlan.id])
+
   const updateTranslation = (axis: 'x' | 'y' | 'z', val: number) => {
-    // In real implementation, call store.updateFragmentTransform
-    console.log(`Update translation ${axis}: ${val}`)
+    if (!fragment || fragment.isLocked) return
+    const newTransform = {
+      ...fragment.currentTransform,
+      translation: {
+        ...fragment.currentTransform.translation,
+        [axis]: val,
+      },
+    }
+    updateFragmentTransform(selectedFragmentId, newTransform, 'manual')
+    debouncedSave(selectedFragmentId, newTransform)
   }
 
   const updateRotation = (axis: 'x' | 'y' | 'z', val: number) => {
-    console.log(`Update rotation ${axis}: ${val}`)
+    if (!fragment || fragment.isLocked) return
+    const newTransform = {
+      ...fragment.currentTransform,
+      rotation: {
+        ...fragment.currentTransform.rotation,
+        [axis]: val,
+      },
+    }
+    updateFragmentTransform(selectedFragmentId, newTransform, 'manual')
+    debouncedSave(selectedFragmentId, newTransform)
+  }
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    setSaveStatus('idle')
+    try {
+      await planningApi.updateFragmentTransform(
+        currentPlan.id,
+        selectedFragmentId,
+        fragment.currentTransform
+      )
+      markSaved()
+      // Update last saved state
+      const saved: Record<string, FragmentTransform> = {}
+      currentPlan.fragmentTransforms.forEach((f: FragmentTransform) => {
+        saved[f.fragmentId] = { ...f }
+      })
+      setLastSavedTransforms(saved)
+      setSaveStatus('success')
+      setTimeout(() => setSaveStatus('idle'), 2000)
+    } catch {
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleDiscard = () => {
+    if (!lastSavedTransforms || !lastSavedTransforms[selectedFragmentId]) return
+    const savedFragment = lastSavedTransforms[selectedFragmentId]
+    updateFragmentTransform(selectedFragmentId, savedFragment.currentTransform, 'reset')
   }
 
   return (
@@ -139,6 +290,37 @@ export default function FragmentControls() {
               onChange={v => updateRotation('z', v)} disabled={fragment.isLocked} />
           </>
         )}
+      </div>
+
+      {/* Save / Discard buttons */}
+      <div className="p-3 border-b border-slate-700">
+        <div className="flex gap-2">
+          <button
+            onClick={handleSave}
+            disabled={!isDirty || isSaving}
+            className={`flex items-center gap-1.5 flex-1 justify-center text-xs font-semibold py-1.5 rounded transition-colors ${
+              saveStatus === 'success'
+                ? 'bg-emerald-900 text-emerald-300 border border-emerald-700'
+                : saveStatus === 'error'
+                ? 'bg-red-900 text-red-300 border border-red-700'
+                : isDirty
+                ? 'bg-cyan-900 text-cyan-300 border border-cyan-700 hover:bg-cyan-800'
+                : 'bg-slate-800 text-slate-500 border border-slate-700'
+            } disabled:opacity-50`}
+            data-testid="save-changes"
+          >
+            <Save size={13} />
+            {isSaving ? 'Saving...' : saveStatus === 'success' ? 'Saved!' : saveStatus === 'error' ? 'Save Failed' : 'Save Changes'}
+          </button>
+          <button
+            onClick={handleDiscard}
+            disabled={!isDirty}
+            className="flex items-center gap-1.5 flex-1 justify-center btn-ghost text-xs disabled:opacity-40"
+            data-testid="discard-changes"
+          >
+            <XCircle size={13} /> Discard
+          </button>
+        </div>
       </div>
 
       {/* AI Suggestion */}

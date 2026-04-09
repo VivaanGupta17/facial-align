@@ -29,6 +29,7 @@ from app.schemas.export import ExportFileInfo, ExportRequest, ExportResponse
 from app.schemas.plan import (
     FragmentInfo,
     FragmentTransform,
+    MetricOverrideRequest,
     OcclusalConstraints,
     OcclusalMetrics,
     ReductionPlanRequest,
@@ -345,6 +346,122 @@ async def apply_surgeon_edit(
             "fragment_id": payload.fragment_id,
             "parent_plan_id": str(plan_id),
         },
+    )
+
+    return _to_plan_response(new_plan)
+
+
+@router.post(
+    "/{plan_id}/metric-override",
+    response_model=ReductionPlanResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Override an occlusal metric target and re-optimize",
+)
+async def override_occlusal_metric(
+    plan_id: uuid.UUID,
+    payload: MetricOverrideRequest,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
+) -> ReductionPlanResponse:
+    """
+    Override a specific occlusal metric target, creating a new plan version.
+
+    The constraint optimizer re-runs with the overridden target to find
+    fragment transforms that achieve the desired metric value.
+    """
+    import copy
+    from datetime import datetime, timezone
+    from app.workers.tasks import run_reduction_refinement
+
+    source_plan = (
+        await db.execute(
+            select(ReductionPlanModel).where(ReductionPlanModel.id == plan_id)
+        )
+    ).scalar_one_or_none()
+    if not source_plan:
+        raise PlanNotFoundError(f"Plan {plan_id} not found")
+
+    # Get next version number
+    next_version_result = (
+        await db.execute(
+            select(ReductionPlanModel)
+            .where(ReductionPlanModel.case_id == source_plan.case_id)
+            .order_by(ReductionPlanModel.plan_version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    next_version = (next_version_result.plan_version + 1) if next_version_result else 1
+
+    # Map metric name to constraint field
+    metric_to_constraint = {
+        "overjet_mm": "target_overjet_mm",
+        "overbite_pct": "target_overbite_mm",
+        "midline_deviation_mm": "midline_tolerance_mm",
+        "occlusal_cant_deg": "cant_tolerance_degrees",
+    }
+
+    # Build updated constraints with override
+    new_constraints = copy.deepcopy(source_plan.dental_constraints or {})
+    constraint_field = metric_to_constraint.get(payload.metric_name)
+    if constraint_field:
+        new_constraints[constraint_field] = payload.target_value
+
+    # Track the override in constraints metadata
+    overrides = new_constraints.get("metric_overrides", [])
+    overrides.append({
+        "metric_name": payload.metric_name,
+        "target_value": payload.target_value,
+        "notes": payload.notes,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": current_user.user_id,
+    })
+    new_constraints["metric_overrides"] = overrides
+
+    new_plan = ReductionPlanModel(
+        case_id=source_plan.case_id,
+        plan_version=next_version,
+        model_name=source_plan.model_name,
+        model_version=source_plan.model_version,
+        status="refinement_pending",
+        fragments=source_plan.fragments,
+        transformations=copy.deepcopy(source_plan.transformations),
+        dental_constraints=new_constraints,
+        skeletal_constraints=source_plan.skeletal_constraints,
+        parent_plan_id=source_plan.id,
+        surgeon_notes=payload.notes,
+        surgeon_edits=list(source_plan.surgeon_edits or []),
+        is_ml_generated=False,
+    )
+    db.add(new_plan)
+    await db.flush()
+
+    # Trigger re-optimization with overridden constraints
+    run_reduction_refinement.delay(
+        plan_id=str(new_plan.id),
+        user_id=current_user.user_id,
+    )
+
+    audit_logger.log_phi_access(
+        user_id=current_user.user_id,
+        action="UPDATE",
+        resource_type="plan",
+        resource_id=str(new_plan.id),
+        ip_address="unknown",
+        additional_context={
+            "operation": "metric_override",
+            "metric_name": payload.metric_name,
+            "target_value": payload.target_value,
+            "parent_plan_id": str(plan_id),
+        },
+    )
+
+    logger.info(
+        "metric_override_applied",
+        plan_id=str(new_plan.id),
+        case_id=str(source_plan.case_id),
+        metric=payload.metric_name,
+        target=payload.target_value,
+        plan_version=next_version,
     )
 
     return _to_plan_response(new_plan)

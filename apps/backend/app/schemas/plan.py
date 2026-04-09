@@ -216,6 +216,24 @@ class SurgeonEditRequest(BaseSchema):
     )
 
 
+class MetricOverrideRequest(BaseSchema):
+    """Request to override an occlusal metric target and re-optimize the plan."""
+    metric_name: str = Field(
+        ...,
+        description="Metric to override: overjet_mm, overbite_pct, midline_deviation_mm, occlusal_cant_deg"
+    )
+    target_value: float = Field(..., description="New target value for the metric")
+    notes: Optional[str] = Field(None, max_length=500, description="Surgeon's notes on override")
+
+    @field_validator("metric_name")
+    @classmethod
+    def validate_metric_name(cls, v: str) -> str:
+        valid = {"overjet_mm", "overbite_pct", "midline_deviation_mm", "occlusal_cant_deg"}
+        if v not in valid:
+            raise ValueError(f"metric_name must be one of: {valid}")
+        return v
+
+
 class ReductionPlanResponse(BaseSchema):
     """Complete reduction plan response."""
     id: uuid.UUID
