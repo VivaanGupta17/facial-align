@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Generic, List, Optional, TypeVar
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 T = TypeVar("T")
@@ -155,6 +155,12 @@ class PaginatedResponse(BaseSchema, Generic[T]):
     page: int = Field(..., description="Current page number")
     page_size: int = Field(..., description="Items per page")
     pages: int = Field(..., description="Total number of pages")
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def has_more(self) -> bool:
+        """Whether more pages exist after the current one."""
+        return self.page < self.pages
 
     @classmethod
     def create(

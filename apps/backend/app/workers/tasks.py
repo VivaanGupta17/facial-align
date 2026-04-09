@@ -6,6 +6,7 @@ Each task wraps a pipeline and handles status reporting and error recovery.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict, List, Optional
 
 from celery import Task
@@ -24,6 +25,21 @@ def _run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+def _publish_ws_event(case_id: str, event: Dict[str, Any]) -> None:
+    """Publish a WebSocket event via Redis pub/sub for cross-process delivery."""
+    try:
+        import redis as sync_redis
+        from app.core.config import get_settings
+        settings = get_settings()
+        base_url = settings.celery.broker_url.rsplit("/", 1)[0]
+        r = sync_redis.from_url(f"{base_url}/3", decode_responses=True)  # DB 3 for WS
+        channel = f"ws:case:{case_id}"
+        r.publish(channel, json.dumps(event))
+        r.close()
+    except Exception:
+        task_logger.debug("Failed to publish WS event", exc_info=True)
 
 
 class BaseMLTask(Task):
@@ -896,14 +912,6 @@ def archive_old_task_results() -> Dict[str, int]:
 
 
 # ─── Helper functions ─────────────────────────────────────────────────────────
-
-
-def _publish_ws_event(case_id: str, event_type: str, data: dict) -> None:
-    """Publish a progress event via Redis pub/sub for WebSocket relay."""
-    import json
-    import redis
-    r = redis.Redis(host="redis", port=6379, db=3)
-    r.publish(f"case:{case_id}", json.dumps({"type": event_type, **data}))
 
 
 def _mark_study_failed(study_id: str, error: str) -> None:
