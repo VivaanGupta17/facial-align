@@ -118,8 +118,10 @@ export type WsConnectionState =
 // =============================================================================
 
 interface WebSocketConfig {
-  /** WebSocket server URL (defaults to ws://same-host/ws) */
+  /** WebSocket server URL (defaults to ws://same-host/api/v1/ws/{caseId}) */
   url?: string
+  /** Case ID for case-specific WebSocket channel */
+  caseId?: string
   /** Maximum reconnection attempts before giving up (0 = unlimited) */
   maxReconnectAttempts?: number
   /** Initial reconnect delay in milliseconds */
@@ -163,13 +165,16 @@ interface UseWebSocketReturn {
   reconnect: () => void
 }
 
-const WS_URL = typeof window !== 'undefined'
-  ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
-  : 'ws://localhost:8000/ws'
+function buildWsUrl(caseId?: string): string {
+  const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8000'
+  const path = caseId ? `/api/v1/ws/${caseId}` : '/api/v1/ws'
+  return `${protocol}://${host}${path}`
+}
 
 export function useWebSocket(config: WebSocketConfig = {}): UseWebSocketReturn {
   const {
-    url = WS_URL,
+    url = buildWsUrl(config.caseId),
     maxReconnectAttempts = 10,
     reconnectDelay = 1000,
     maxReconnectDelay = 30_000,

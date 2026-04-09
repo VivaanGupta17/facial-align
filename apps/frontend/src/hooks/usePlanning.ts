@@ -32,7 +32,10 @@ export function useGeneratePlan(caseId: string) {
   return useMutation({
     mutationFn: () => planningApi.generatePlan(caseId),
     onSuccess: (data) => {
-      qc.setQueryData(planningKeys.plan(data.id), data)
+      // generatePlan now returns { jobId, planId } (202 async), not a plan.
+      // Invalidate versions so the UI re-fetches once the plan is ready.
+      // The component should poll /jobs/{jobId} or listen via WebSocket
+      // for REDUCTION_COMPLETE, then refetch the plan.
       qc.invalidateQueries({ queryKey: planningKeys.versions(caseId) })
     },
   })

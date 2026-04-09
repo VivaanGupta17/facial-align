@@ -54,6 +54,7 @@ celery_app.conf.update(
         "app.workers.tasks.run_mesh_extraction_pipeline": {"queue": "default"},
         "app.workers.tasks.run_occlusion_analysis_pipeline": {"queue": "default"},
         "app.workers.tasks.run_reduction_refinement": {"queue": "gpu"},
+        "app.workers.tasks.run_supervised_reduction_pipeline": {"queue": "gpu"},
     },
 
     # Queue definitions

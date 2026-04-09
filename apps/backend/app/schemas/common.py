@@ -11,16 +11,22 @@ from typing import Any, Generic, List, Optional, TypeVar
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.alias_generators import to_camel
 
 T = TypeVar("T")
 
 
 class BaseSchema(BaseModel):
-    """Base schema with common configuration."""
+    """Base schema with common configuration.
+
+    All response fields are serialized as camelCase via alias_generator.
+    Python code uses snake_case; JSON output uses camelCase.
+    """
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True,
         use_enum_values=True,
+        alias_generator=to_camel,
     )
 
 
