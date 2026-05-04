@@ -7,6 +7,7 @@ import pytest
 from app.core.security import get_current_user
 from app.db.database import get_db_session
 from tests.unit.backend.api_test_utils import (
+    make_case,
     MockExecuteResult,
     make_db_override,
     make_plan,
@@ -20,11 +21,14 @@ pytestmark = [pytest.mark.asyncio]
 
 async def test_get_scene_assets_returns_mesh_and_fragment_urls(app, async_client):
     case_id = uuid.uuid4()
-    segmentation = make_segmentation(case_id=case_id)
+    case = make_case(id=case_id, institution_code="DEMO-INST")
+    segmentation = make_segmentation(case_id=case_id, fragment_masks_path="/tmp/fragments.nii.gz")
     plan = make_plan(case_id=case_id)
     session = make_session(
         [
+            MockExecuteResult(scalar_one_or_none=case),
             MockExecuteResult(scalar_one_or_none=segmentation),
+            MockExecuteResult(scalar_one_or_none=case),
             MockExecuteResult(scalar_one_or_none=plan),
         ]
     )
@@ -45,10 +49,28 @@ async def test_get_scene_assets_returns_mesh_and_fragment_urls(app, async_client
     app.dependency_overrides.clear()
 
 
+async def test_get_scene_assets_returns_403_for_cross_institution_access(app, async_client):
+    case_id = uuid.uuid4()
+    case = make_case(id=case_id, institution_code="OTHER-INST", surgeon_id="another-surgeon", created_by="another-surgeon")
+    session = make_session([MockExecuteResult(scalar_one_or_none=case)])
+    app.dependency_overrides[get_db_session] = make_db_override(session)
+    app.dependency_overrides[get_current_user] = make_user_override(institution_code="DEMO-INST")
+
+    response = await async_client.get(f"/api/v1/viewer/cases/{case_id}/assets")
+
+    assert response.status_code == 403
+
+    app.dependency_overrides.clear()
+
+
 async def test_landmarks_endpoint_returns_standard_landmarks(app, async_client):
+    case_id = uuid.uuid4()
+    case = make_case(id=case_id, institution_code="DEMO-INST")
+    session = make_session([MockExecuteResult(scalar_one_or_none=case)])
+    app.dependency_overrides[get_db_session] = make_db_override(session)
     app.dependency_overrides[get_current_user] = make_user_override()
 
-    response = await async_client.get(f"/api/v1/viewer/cases/{uuid.uuid4()}/landmarks")
+    response = await async_client.get(f"/api/v1/viewer/cases/{case_id}/landmarks")
 
     assert response.status_code == 200
     body = response.json()

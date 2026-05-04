@@ -19,6 +19,7 @@ class User(Base):
     full_name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="viewer")
     institution = Column(String(255), nullable=True)
+    institution_code = Column(String(32), nullable=True, index=True)
     specialty = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)

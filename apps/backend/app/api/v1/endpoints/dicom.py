@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import ensure_study_read_access, resolve_requested_institution_code
 from app.core.config import get_settings
 from app.core.exceptions import DicomValidationError, DuplicateStudyError, StudyNotFoundError
 from app.core.logging import get_logger
@@ -72,6 +73,11 @@ async def upload_dicom_study(
     from app.core.security import hash_mrn
     from app.workers.tasks import run_dicom_ingestion_pipeline
 
+    scoped_institution_code = resolve_requested_institution_code(
+        current_user,
+        institution_code,
+    )
+
     # Validate file types
     for f in files:
         if f.filename:
@@ -122,7 +128,7 @@ async def upload_dicom_study(
             mrn_hash=mrn_hash,
             age_at_registration=patient_age,
             sex=patient_sex.upper() if patient_sex else None,
-            institution_code=institution_code,
+            institution_code=scoped_institution_code,
             created_by=current_user.user_id,
         )
         db.add(patient)
@@ -187,13 +193,22 @@ async def list_studies(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> List[DicomStudyListItem]:
     """List imaging studies with optional filters."""
-    stmt = select(ImagingStudy)
+    stmt = select(ImagingStudy).join(Patient, Patient.id == ImagingStudy.patient_id)
     if patient_id:
         stmt = stmt.where(ImagingStudy.patient_id == patient_id)
     if modality:
         stmt = stmt.where(ImagingStudy.modality == modality.upper())
     if ingestion_status:
         stmt = stmt.where(ImagingStudy.ingestion_status == ingestion_status)
+
+    if not current_user.is_admin:
+        if current_user.institution_code:
+            stmt = stmt.where(
+                (Patient.institution_code == current_user.institution_code)
+                | (ImagingStudy.uploaded_by == current_user.user_id)
+            )
+        else:
+            stmt = stmt.where(ImagingStudy.uploaded_by == current_user.user_id)
 
     offset = (page - 1) * page_size
     stmt = stmt.order_by(ImagingStudy.created_at.desc()).offset(offset).limit(page_size)
@@ -231,6 +246,8 @@ async def get_study_metadata(
     ).scalar_one_or_none()
     if not study:
         raise StudyNotFoundError(f"Study {study_id} not found")
+
+    await ensure_study_read_access(study, current_user, db)
 
     audit_logger.log_phi_access(
         user_id=current_user.user_id,
@@ -282,6 +299,8 @@ async def get_quality_report(
     ).scalar_one_or_none()
     if not study:
         raise StudyNotFoundError(f"Study {study_id} not found")
+
+    await ensure_study_read_access(study, current_user, db)
 
     if study.quality_score is None:
         raise HTTPException(
@@ -344,6 +363,11 @@ async def init_chunked_upload(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """Create an upload session and return upload_id + chunk parameters."""
+    scoped_institution_code = resolve_requested_institution_code(
+        current_user,
+        institution_code,
+    )
+
     if total_size > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -365,7 +389,7 @@ async def init_chunked_upload(
         "patient_mrn": patient_mrn,
         "patient_age": patient_age,
         "patient_sex": patient_sex,
-        "institution_code": institution_code,
+        "institution_code": scoped_institution_code,
         "case_type": case_type,
         "user_id": current_user.user_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -476,7 +500,10 @@ async def complete_chunked_upload(
             mrn_hash=mrn_hash,
             age_at_registration=meta.get("patient_age"),
             sex=meta["patient_sex"].upper() if meta.get("patient_sex") else None,
-            institution_code=meta.get("institution_code"),
+            institution_code=resolve_requested_institution_code(
+                current_user,
+                meta.get("institution_code"),
+            ),
             created_by=current_user.user_id,
         )
         db.add(patient)

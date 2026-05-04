@@ -79,9 +79,18 @@ def make_db_override(session: AsyncMock):
     return override
 
 
-def make_user_override(user_id: str = "test-surgeon-001", role: str = "surgeon"):
+def make_user_override(
+    user_id: str = "test-surgeon-001",
+    role: str = "surgeon",
+    institution_code: str | None = "DEMO-INST",
+):
     async def override():
-        return CurrentUser(user_id=user_id, role=role, jti="test-jti")
+        return CurrentUser(
+            user_id=user_id,
+            role=role,
+            jti="test-jti",
+            institution_code=institution_code,
+        )
 
     return override
 
@@ -100,6 +109,7 @@ def make_user(
     user.full_name = "Dr. Test Surgeon"
     user.role = role
     user.institution = "Test Hospital"
+    user.institution_code = "DEMO-INST"
     user.specialty = "OMFS"
     user.is_active = is_active
     user.is_verified = True
@@ -131,6 +141,7 @@ def make_case(**overrides: Any) -> MagicMock:
     case.updated_at = overrides.get("updated_at", datetime.now(timezone.utc))
     case.approved_at = overrides.get("approved_at", None)
     case.created_by = overrides.get("created_by", "test-surgeon-001")
+    case.institution_code = overrides.get("institution_code", "DEMO-INST")
     case.transition_to = overrides.get("transition_to", MagicMock())
     return case
 
@@ -258,6 +269,8 @@ def make_study(**overrides: Any) -> MagicMock:
     study.slice_count = overrides.get("slice_count", 120)
     study.pixel_spacing_mm = overrides.get("pixel_spacing_mm", 0.5)
     study.slice_thickness_mm = overrides.get("slice_thickness_mm", 0.6)
+    study.uploaded_by = overrides.get("uploaded_by", "test-surgeon-001")
+    study.institution_code = overrides.get("institution_code", "DEMO-INST")
     study.metadata_json = overrides.get(
         "metadata_json",
         {"Columns": 512, "Rows": 512, "InstitutionName": "Test Hospital"},

@@ -13,11 +13,13 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import ensure_case_read_access, ensure_segmentation_read_access
 from app.core.config import get_settings
 from app.core.exceptions import CaseNotFoundError, MeshError, SegmentationNotFoundError
 from app.core.logging import get_logger
 from app.core.security import CurrentUser, get_current_user
 from app.db.database import get_db_session
+from app.models.case import SurgicalCase
 from app.models.plan import ReductionPlan
 from app.models.segmentation import SegmentationResult
 from app.models.case_study import CaseStudy
@@ -81,6 +83,13 @@ async def get_scene_assets(
     Returns URLs to GLB mesh files, anatomical landmarks, and bounding box.
     If plan_id is provided, transforms are baked into fragment meshes.
     """
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+    await ensure_case_read_access(case, current_user, db)
+
     # Determine active segmentation
     if segmentation_id:
         seg = (
@@ -100,6 +109,9 @@ async def get_scene_assets(
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+    if seg:
+        await ensure_segmentation_read_access(seg, current_user, db)
 
     # Build mesh URL map
     mesh_urls: Dict[str, str] = {}
@@ -155,6 +167,8 @@ async def serve_glb_mesh(
     if not seg:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
 
+    await ensure_segmentation_read_access(seg, current_user, db)
+
     mesh_paths: dict = seg.mesh_storage_paths or {}
     structure_paths = mesh_paths.get(structure_name, {})
     glb_path = structure_paths.get("glb") if isinstance(structure_paths, dict) else None
@@ -195,6 +209,8 @@ async def serve_stl_mesh(
     if not seg:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
 
+    await ensure_segmentation_read_access(seg, current_user, db)
+
     mesh_paths: dict = seg.mesh_storage_paths or {}
     structure_paths = mesh_paths.get(structure_name, {})
     stl_path = structure_paths.get("stl") if isinstance(structure_paths, dict) else None
@@ -232,6 +248,13 @@ async def get_volume_slices(
     Get metadata for CT volume cross-sections.
     Actual slice images are served via /viewer/slices/{case_id}/{plane}/{index}.webp
     """
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+    await ensure_case_read_access(case, current_user, db)
+
     study = (
         await db.execute(
             select(ImagingStudy)
@@ -278,12 +301,20 @@ async def get_volume_slices(
 async def get_landmarks(
     case_id: uuid.UUID,
     landmark_type: Optional[str] = Query(None, description="Filter by type: cephalometric, surgical, dental"),
+    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> List[LandmarkPoint]:
     """
     Get anatomical landmarks for a case.
     Landmarks are detected during segmentation (nasion, ANS, PNS, menton, etc.).
     """
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+    await ensure_case_read_access(case, current_user, db)
+
     # TODO: Load from landmark detection service output stored in segmentation result
     # Standard craniofacial cephalometric landmarks
     standard_landmarks = [

@@ -16,6 +16,7 @@ class UserRegister(BaseSchema):
     full_name: str = Field(..., min_length=1)
     role: str = Field(default="surgeon")
     institution: Optional[str] = None
+    institution_code: Optional[str] = None
     specialty: Optional[str] = None
 
 
@@ -37,6 +38,7 @@ class UserResponse(BaseSchema):
     full_name: str
     role: str
     institution: Optional[str] = None
+    institution_code: Optional[str] = None
     specialty: Optional[str] = None
     is_active: bool
     created_at: datetime
@@ -54,4 +56,5 @@ class PasswordChangeRequest(BaseSchema):
 class UserUpdate(BaseSchema):
     full_name: Optional[str] = None
     institution: Optional[str] = None
+    institution_code: Optional[str] = None
     specialty: Optional[str] = None

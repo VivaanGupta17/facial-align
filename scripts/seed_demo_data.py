@@ -202,6 +202,7 @@ DEMO_USERS = [
         "full_name": "Demo Surgeon",
         "role": "surgeon",
         "institution": "Facial Align Demo Hospital",
+        "institution_code": "DEMO-INST",
         "specialty": "Craniomaxillofacial Surgery",
         "label": "primary_surgeon",
     },
@@ -209,8 +210,9 @@ DEMO_USERS = [
         "email": "reviewer@facialign.local",
         "password": "reviewer",
         "full_name": "Demo Reviewer",
-        "role": "surgeon",
+        "role": "reviewer",
         "institution": "Facial Align Demo Hospital",
+        "institution_code": "DEMO-INST",
         "specialty": "Surgical Review",
         "label": "reviewer",
     },
@@ -642,12 +644,20 @@ async def _ensure_seed_users(db, profile: str) -> Dict[str, Dict[str, str]]:
                 full_name=user_def["full_name"],
                 role=user_def["role"],
                 institution=user_def["institution"],
+                institution_code=user_def["institution_code"],
                 specialty=user_def["specialty"],
                 is_active=True,
                 is_verified=True,
             )
             db.add(existing)
             await db.flush()
+        else:
+            existing.role = user_def["role"]
+            existing.institution = user_def["institution"]
+            existing.institution_code = user_def["institution_code"]
+            existing.specialty = user_def["specialty"]
+            if not existing.is_active:
+                existing.is_active = True
 
         users_by_label[user_def["label"]] = {
             "id": str(existing.id),

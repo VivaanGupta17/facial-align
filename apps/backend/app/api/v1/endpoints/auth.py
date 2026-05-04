@@ -38,8 +38,16 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _make_token_response(user_id: str, role: str) -> TokenResponse:
-    access_token = create_access_token(user_id=user_id, role=role)
+def _make_token_response(
+    user_id: str,
+    role: str,
+    institution_code: str | None = None,
+) -> TokenResponse:
+    access_token = create_access_token(
+        user_id=user_id,
+        role=role,
+        institution_code=institution_code,
+    )
     refresh_token = create_refresh_token(user_id=user_id)
     return TokenResponse(
         access_token=access_token,
@@ -65,6 +73,7 @@ async def register(
         full_name=body.full_name,
         role=body.role,
         institution=body.institution,
+        institution_code=body.institution_code,
         specialty=body.specialty,
         is_verified=settings.environment != "production",
     )
@@ -78,7 +87,11 @@ async def register(
         success=True,
     )
 
-    return _make_token_response(user_id=str(user.id), role=user.role)
+    return _make_token_response(
+        user_id=str(user.id),
+        role=user.role,
+        institution_code=user.institution_code,
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -114,7 +127,11 @@ async def login(
         success=True,
     )
 
-    return _make_token_response(user_id=str(user.id), role=user.role)
+    return _make_token_response(
+        user_id=str(user.id),
+        role=user.role,
+        institution_code=user.institution_code,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -135,7 +152,11 @@ async def refresh(
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
-    return _make_token_response(user_id=str(user.id), role=user.role)
+    return _make_token_response(
+        user_id=str(user.id),
+        role=user.role,
+        institution_code=user.institution_code,
+    )
 
 
 @router.get("/me", response_model=UserResponse)

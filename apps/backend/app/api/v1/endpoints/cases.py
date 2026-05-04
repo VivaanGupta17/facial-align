@@ -12,12 +12,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import (
+    ensure_case_read_access,
+    ensure_case_write_access,
+    ensure_study_read_access,
+)
 from app.core.exceptions import CaseNotFoundError, InvalidStatusTransitionError
 from app.core.logging import get_logger
 from app.core.security import CurrentUser, audit_logger, get_current_user, require_surgeon
 from app.db.database import get_db_session
 from app.models.case import CaseStatus, CaseType, SurgicalCase
 from app.models.case_study import CaseStudy
+from app.models.patient import Patient
 from app.models.plan import ReductionPlan
 from app.models.segmentation import SegmentationResult
 from app.models.study import ImagingStudy
@@ -199,6 +205,25 @@ async def create_case(
 
     Requires surgeon or admin role.
     """
+    patient = (
+        await db.execute(select(Patient).where(Patient.id == payload.patient_id))
+    ).scalar_one_or_none()
+    if not patient:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found")
+
+    study = (
+        await db.execute(select(ImagingStudy).where(ImagingStudy.id == payload.study_id))
+    ).scalar_one_or_none()
+    if not study:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found")
+    if str(study.patient_id) != str(payload.patient_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Study does not belong to the selected patient",
+        )
+
+    await ensure_study_read_access(study, current_user, db)
+
     case = SurgicalCase(
         case_number=_generate_case_number(),
         patient_id=payload.patient_id,
@@ -271,6 +296,8 @@ async def list_cases(
     List surgical cases with optional filters and pagination.
     """
     stmt = select(SurgicalCase)
+    if not current_user.is_admin:
+        stmt = stmt.join(Patient, Patient.id == SurgicalCase.patient_id)
 
     if case_type:
         stmt = stmt.where(SurgicalCase.case_type == case_type)
@@ -283,10 +310,17 @@ async def list_cases(
 
     # Non-admin users only see cases they're part of
     if not current_user.is_admin:
-        stmt = stmt.where(
+        own_case_filter = (
             (SurgicalCase.surgeon_id == current_user.user_id)
             | (SurgicalCase.created_by == current_user.user_id)
+            | (SurgicalCase.reviewer_id == current_user.user_id)
         )
+        if current_user.institution_code:
+            stmt = stmt.where(
+                own_case_filter | (Patient.institution_code == current_user.institution_code)
+            )
+        else:
+            stmt = stmt.where(own_case_filter)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
@@ -329,6 +363,8 @@ async def get_case(
     if not case:
         raise CaseNotFoundError(f"Case {case_id} not found", context={"case_id": str(case_id)})
 
+    await ensure_case_read_access(case, current_user, db)
+
     audit_logger.log_phi_access(
         user_id=current_user.user_id,
         action="READ",
@@ -352,6 +388,8 @@ async def update_case(
     ).scalar_one_or_none()
     if not case:
         raise CaseNotFoundError(f"Case {case_id} not found")
+
+    await ensure_case_write_access(case, current_user, db)
 
     changed_fields = []
     for field, value in payload.model_dump(exclude_none=True).items():
@@ -388,6 +426,8 @@ async def transition_case_status(
     ).scalar_one_or_none()
     if not case:
         raise CaseNotFoundError(f"Case {case_id} not found")
+
+    await ensure_case_write_access(case, current_user, db)
 
     old_status = CaseStatus(case.status)
     requested_status = CaseStatus(payload.new_status)
@@ -440,6 +480,8 @@ async def archive_case(
     ).scalar_one_or_none()
     if not case:
         raise CaseNotFoundError(f"Case {case_id} not found")
+
+    await ensure_case_write_access(case, current_user, db)
 
     try:
         case.transition_to(CaseStatus.ARCHIVED)

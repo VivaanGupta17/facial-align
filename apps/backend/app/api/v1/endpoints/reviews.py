@@ -13,9 +13,15 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import ensure_case_read_access, ensure_review_access
 from app.core.exceptions import CaseNotFoundError
 from app.core.logging import get_logger
-from app.core.security import CurrentUser, audit_logger, get_current_user, require_surgeon
+from app.core.security import (
+    CurrentUser,
+    audit_logger,
+    get_current_user,
+    require_reviewer,
+)
 from app.db.database import get_db_session
 from app.models.case import SurgicalCase
 from app.models.plan import ReductionPlan
@@ -162,7 +168,8 @@ async def get_review(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> ReviewResponse:
     """Return the active persistent review for a case."""
-    await _get_case_or_404(case_id, db)
+    case = await _get_case_or_404(case_id, db)
+    await ensure_case_read_access(case, current_user, db)
     review = await _get_or_create_review(case_id, current_user, db)
     return _review_to_response(review)
 
@@ -176,10 +183,11 @@ async def update_checklist(
     review_id: str,
     payload: ChecklistUpdateRequest,
     db: AsyncSession = Depends(get_db_session),
-    current_user: CurrentUser = Depends(require_surgeon),
+    current_user: CurrentUser = Depends(require_reviewer),
 ) -> ReviewResponse:
     """Toggle a checklist item's passed status."""
     review = await _get_review_by_id(review_id, db)
+    await ensure_review_access(review, current_user, db)
     checklist = [dict(item) for item in review.checklist or []]
 
     for item in checklist:
@@ -205,10 +213,11 @@ async def approve_review(
     review_id: str,
     payload: ReviewActionRequest,
     db: AsyncSession = Depends(get_db_session),
-    current_user: CurrentUser = Depends(require_surgeon),
+    current_user: CurrentUser = Depends(require_reviewer),
 ) -> ReviewResponse:
     """Approve the plan with optional notes and digital signature."""
     review = await _get_review_by_id(review_id, db)
+    case = await ensure_review_access(review, current_user, db)
 
     review.decision = "approved"
     review.notes = payload.notes
@@ -229,7 +238,6 @@ async def approve_review(
             plan.approved_by = current_user.user_id
             plan.status = "approved"
 
-    case = await _get_case_or_404(str(review.case_id), db)
     case.reviewer_id = current_user.user_id
 
     logger.info(
@@ -260,10 +268,11 @@ async def request_revision(
     review_id: str,
     payload: ReviewActionRequest,
     db: AsyncSession = Depends(get_db_session),
-    current_user: CurrentUser = Depends(require_surgeon),
+    current_user: CurrentUser = Depends(require_reviewer),
 ) -> ReviewResponse:
     """Request revision of the surgical plan."""
     review = await _get_review_by_id(review_id, db)
+    await ensure_review_access(review, current_user, db)
     review.decision = "revision_requested"
     review.notes = payload.notes
     review.reviewer_id = current_user.user_id
@@ -289,10 +298,11 @@ async def reject_review(
     review_id: str,
     payload: ReviewActionRequest,
     db: AsyncSession = Depends(get_db_session),
-    current_user: CurrentUser = Depends(require_surgeon),
+    current_user: CurrentUser = Depends(require_reviewer),
 ) -> ReviewResponse:
     """Reject the surgical plan."""
     review = await _get_review_by_id(review_id, db)
+    await ensure_review_access(review, current_user, db)
     review.decision = "rejected"
     review.notes = payload.notes
     review.reviewer_id = current_user.user_id

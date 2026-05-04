@@ -49,6 +49,19 @@ async def test_get_study_metadata_returns_detail_view(app, async_client):
     app.dependency_overrides.clear()
 
 
+async def test_get_study_metadata_returns_403_for_out_of_scope_user(app, async_client):
+    study = make_study(institution_code="OTHER-INST", uploaded_by="another-user")
+    session = make_session([MockExecuteResult(scalar_one_or_none=study)])
+    app.dependency_overrides[get_db_session] = make_db_override(session)
+    app.dependency_overrides[get_current_user] = make_user_override(institution_code="DEMO-INST")
+
+    response = await async_client.get(f"/api/v1/dicom/studies/{study.id}")
+
+    assert response.status_code == 403
+
+    app.dependency_overrides.clear()
+
+
 async def test_upload_rejects_invalid_file_types(app, async_client):
     session = make_session([])
     app.dependency_overrides[get_db_session] = make_db_override(session)

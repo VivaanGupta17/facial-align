@@ -27,6 +27,7 @@ from jose import ExpiredSignatureError, JWTError, jwt
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.scope import normalize_institution_code
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -86,6 +87,7 @@ class TokenPayload:
 def create_access_token(
     user_id: str,
     role: str,
+    institution_code: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
     """
@@ -107,6 +109,7 @@ def create_access_token(
     payload = {
         "sub": user_id,
         "role": role,
+        "institution_code": normalize_institution_code(institution_code),
         "exp": expire,
         "iat": now,
         "jti": str(uuid.uuid4()),
@@ -182,10 +185,12 @@ class CurrentUser:
         user_id: str,
         role: str,
         jti: str,
+        institution_code: Optional[str] = None,
     ) -> None:
         self.user_id = user_id
         self.role = role
         self.jti = jti
+        self.institution_code = normalize_institution_code(institution_code)
 
     @property
     def is_surgeon(self) -> bool:
@@ -194,6 +199,20 @@ class CurrentUser:
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    @property
+    def is_reviewer(self) -> bool:
+        return self.role == "reviewer"
+
+    @property
+    def is_research(self) -> bool:
+        return self.role == "research"
+
+    def can_access_institution(self, institution_code: Optional[str]) -> bool:
+        if self.is_admin:
+            return True
+        normalized = normalize_institution_code(institution_code)
+        return bool(normalized and self.institution_code and normalized == self.institution_code)
 
     def require_role(self, *roles: str) -> None:
         """Raise 403 if user does not have one of the required roles."""
@@ -219,12 +238,18 @@ async def get_current_user(
         user_id = payload.get("sub")
         role = payload.get("role", "viewer")
         jti = payload.get("jti", "")
+        institution_code = payload.get("institution_code")
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",
             )
-        return CurrentUser(user_id=user_id, role=role, jti=jti)
+        return CurrentUser(
+            user_id=user_id,
+            role=role,
+            jti=jti,
+            institution_code=institution_code,
+        )
 
     if api_key:
         api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
@@ -244,7 +269,12 @@ async def get_current_user(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Inactive user for this API key",
                 )
-            return CurrentUser(user_id=str(user.id), role=user.role, jti="")
+            return CurrentUser(
+                user_id=str(user.id),
+                role=user.role,
+                jti="",
+                institution_code=getattr(user, "institution_code", None),
+            )
             
         logger.info("api_key_auth_attempt", key_hash_prefix=api_key_hash[:8], result="failed")
         raise HTTPException(
@@ -264,6 +294,14 @@ async def require_surgeon(
 ) -> CurrentUser:
     """Dependency requiring surgeon or admin role."""
     current_user.require_role("surgeon", "admin")
+    return current_user
+
+
+async def require_reviewer(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Dependency requiring reviewer, surgeon, or admin role."""
+    current_user.require_role("reviewer", "surgeon", "admin")
     return current_user
 
 
