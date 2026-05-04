@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { casesApi, type CasesListParams } from '../lib/api'
-import type { SurgicalCase, CaseListItem } from '../types/medical'
+import type { SurgicalCase } from '../types/medical'
 
 export const caseKeys = {
   all: ['cases'] as const,

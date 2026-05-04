@@ -26,7 +26,7 @@ import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "backend"))
@@ -192,6 +192,107 @@ DEMO_CASES = [
             {"id": "nasal_bone", "structure": "nasal", "volume_mm3": 1200},
         ],
         "ct_quality_grade": "B",
+    },
+]
+
+DEMO_USERS = [
+    {
+        "email": "surgeon@facialign.local",
+        "password": "surgeon",
+        "full_name": "Demo Surgeon",
+        "role": "surgeon",
+        "institution": "Facial Align Demo Hospital",
+        "specialty": "Craniomaxillofacial Surgery",
+        "label": "primary_surgeon",
+    },
+    {
+        "email": "reviewer@facialign.local",
+        "password": "reviewer",
+        "full_name": "Demo Reviewer",
+        "role": "surgeon",
+        "institution": "Facial Align Demo Hospital",
+        "specialty": "Surgical Review",
+        "label": "reviewer",
+    },
+]
+
+DEFAULT_CHECKLIST = [
+    {
+        "id": "seg-accuracy",
+        "category": "Segmentation",
+        "label": "Bone segmentation boundaries are accurate",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "seg-complete",
+        "category": "Segmentation",
+        "label": "All relevant structures are segmented",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "frag-identified",
+        "category": "Segmentation",
+        "label": "Fracture fragments correctly identified",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "reduction-sym",
+        "category": "Reduction",
+        "label": "Facial symmetry is restored",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "reduction-occ",
+        "category": "Reduction",
+        "label": "Occlusion is within acceptable parameters",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "reduction-condyle",
+        "category": "Reduction",
+        "label": "Condylar seating is adequate",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "splint-fit",
+        "category": "Splint",
+        "label": "Intermediate splint design is appropriate",
+        "passed": None,
+        "severity": "recommended",
+    },
+    {
+        "id": "hardware-plan",
+        "category": "Hardware",
+        "label": "Plate and screw positions are feasible",
+        "passed": None,
+        "severity": "recommended",
+    },
+    {
+        "id": "nerve-clearance",
+        "category": "Safety",
+        "label": "Hardware avoids inferior alveolar nerve",
+        "passed": None,
+        "severity": "required",
+    },
+    {
+        "id": "airway-clear",
+        "category": "Safety",
+        "label": "Airway dimensions are maintained",
+        "passed": None,
+        "severity": "recommended",
+    },
+    {
+        "id": "aesthetics",
+        "category": "Aesthetics",
+        "label": "Soft tissue projection is acceptable",
+        "passed": None,
+        "severity": "optional",
     },
 ]
 
@@ -386,17 +487,22 @@ def generate_reduction_plan(fragments: List[Dict]) -> Dict[str, Any]:
     return plan
 
 
-def build_demo_dataset() -> Dict[str, Any]:
+def build_demo_dataset(profile: str = "demo") -> Dict[str, Any]:
     """Build the complete demo dataset."""
     import random
-    dataset = {"patients": [], "cases": [], "timestamp": datetime.now(timezone.utc).isoformat()}
+    dataset = {
+        "profile": profile,
+        "patients": [],
+        "cases": [],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
     base_date = datetime.now(timezone.utc) - timedelta(days=30)
 
     for i, (patient, case_def, ct_study) in enumerate(
         zip(DEMO_PATIENTS, DEMO_CASES, DEMO_CT_STUDIES)
     ):
-        case_id = generate_case_id()
+        case_id = f"{profile.upper()}-{generate_case_id()}"
         study_uid = generate_study_uid()
         case_date = base_date + timedelta(days=i * 5, hours=random.randint(6, 18))
 
@@ -446,171 +552,371 @@ def _demo_uuid(label: str) -> str:
     return str(uuid.uuid5(DEMO_NAMESPACE, label))
 
 
+def _seed_namespace(profile: str) -> uuid.UUID:
+    if profile == "release_test":
+        return uuid.UUID("fa000000-0000-4000-8000-000000000001")
+    return DEMO_NAMESPACE
+
+
+def _seed_uuid(profile: str, label: str) -> str:
+    """Generate a deterministic UUID scoped to a seed profile."""
+    return str(uuid.uuid5(_seed_namespace(profile), label))
+
+
+def _case_number_for_profile(profile: str, index: int) -> str:
+    prefix = "REL" if profile == "release_test" else "DEMO"
+    return f"FA-{prefix}-{1001 + index:04d}"
+
+
+def _build_segmentation_provenance(case_status: str, profile: str) -> dict:
+    warnings: list[str] = []
+    if profile == "release_test" and case_status in {"PLANNING", "REVIEWED"}:
+        warnings.append(
+            "Dental segmentation beta path unavailable; deterministic baseline in use."
+        )
+
+    return {
+        "algorithmUsed": "totalsegmentator",
+        "validationTier": "deterministic_baseline",
+        "betaStatus": "not_beta",
+        "warnings": warnings,
+        "fallbackReason": warnings[0] if warnings else None,
+        "modelVersion": "2.0.1",
+    }
+
+
+def _build_plan_provenance(case_status: str, profile: str) -> dict:
+    warnings: list[str] = []
+    beta_status = "not_beta"
+    fallback_reason = None
+    if profile == "release_test" and case_status == "PLANNING":
+        fallback_reason = (
+            "Learned reduction beta unavailable; baseline ICP planner is active."
+        )
+        warnings.append(fallback_reason)
+        beta_status = "fallback"
+
+    return {
+        "algorithmUsed": "baseline_icp",
+        "validationTier": "deterministic_baseline",
+        "betaStatus": beta_status,
+        "warnings": warnings,
+        "fallbackReason": fallback_reason,
+        "modelVersion": "1.0.0",
+    }
+
+
+def _build_review_state(case_status: str) -> Tuple[str, str, str | None]:
+    if case_status in {"APPROVED", "ARCHIVED"}:
+        return ("approved", "Plan approved for operative use.", "signature-approved")
+    if case_status == "REVIEWED":
+        return (
+            "revision_requested",
+            "Need additional manual adjustment before final approval.",
+            None,
+        )
+    return ("pending", "", None)
+
+
 # ─── Database seeding ────────────────────────────────────────────────────────
 
 
-async def seed_to_database() -> None:
-    """Write demo data directly to the database using async SQLAlchemy."""
-    import random
+async def _ensure_seed_users(db, profile: str) -> Dict[str, Dict[str, str]]:
+    from sqlalchemy import select
+
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    users_by_label: Dict[str, Dict[str, str]] = {}
+
+    for user_def in DEMO_USERS:
+        existing = (
+            await db.execute(select(User).where(User.email == user_def["email"]))
+        ).scalar_one_or_none()
+
+        if existing is None:
+            existing = User(
+                id=_seed_uuid(profile, f"user-{user_def['label']}"),
+                email=user_def["email"],
+                hashed_password=hash_password(user_def["password"]),
+                full_name=user_def["full_name"],
+                role=user_def["role"],
+                institution=user_def["institution"],
+                specialty=user_def["specialty"],
+                is_active=True,
+                is_verified=True,
+            )
+            db.add(existing)
+            await db.flush()
+
+        users_by_label[user_def["label"]] = {
+            "id": str(existing.id),
+            "email": existing.email,
+            "full_name": existing.full_name,
+        }
+
+    return users_by_label
+
+
+async def _clear_seed_data(profile: str) -> None:
+    from sqlalchemy import delete
 
     from app.db.database import create_db_engine, dispose_db_engine, get_db_context
     from app.models.case import SurgicalCase
+    from app.models.case_study import CaseStudy
     from app.models.patient import Patient
     from app.models.plan import ReductionPlan
+    from app.models.review import PlanReview
     from app.models.segmentation import SegmentationResult
     from app.models.study import ImagingStudy
-
-    random.seed(42)  # Reproducible
 
     await create_db_engine()
 
     try:
-        # Check idempotency — if first demo patient already exists, skip
         async with get_db_context() as db:
-            from sqlalchemy import select
-            first_patient_id = _demo_uuid("patient-DEMO-PT-001")
-            existing = (await db.execute(
-                select(Patient.id).where(Patient.id == first_patient_id)
-            )).scalar_one_or_none()
+            case_ids = [_seed_uuid(profile, f"case-{i}") for i in range(len(DEMO_CASES))]
+            study_ids = [_seed_uuid(profile, f"study-{pt['patient_id']}") for pt in DEMO_PATIENTS]
+            patient_ids = [_seed_uuid(profile, f"patient-{pt['patient_id']}") for pt in DEMO_PATIENTS]
+            plan_ids = [_seed_uuid(profile, f"plan-{i}") for i in range(len(DEMO_CASES))]
+            review_ids = [_seed_uuid(profile, f"review-{i}") for i in range(len(DEMO_CASES))]
+            seg_ids = [_seed_uuid(profile, f"seg-{i}") for i in range(len(DEMO_CASES))]
+
+            await db.execute(delete(PlanReview).where(PlanReview.id.in_(review_ids)))
+            await db.execute(delete(ReductionPlan).where(ReductionPlan.id.in_(plan_ids)))
+            await db.execute(delete(SegmentationResult).where(SegmentationResult.id.in_(seg_ids)))
+            await db.execute(delete(CaseStudy).where(CaseStudy.case_id.in_(case_ids)))
+            await db.execute(delete(SurgicalCase).where(SurgicalCase.id.in_(case_ids)))
+            await db.execute(delete(ImagingStudy).where(ImagingStudy.id.in_(study_ids)))
+            await db.execute(delete(Patient).where(Patient.id.in_(patient_ids)))
+    finally:
+        await dispose_db_engine()
+
+
+async def seed_to_database(profile: str = "demo") -> None:
+    """Write deterministic demo or release-test data directly to the database."""
+    import random
+
+    from sqlalchemy import select
+
+    from app.db.database import create_db_engine, dispose_db_engine, get_db_context
+    from app.models.case import SurgicalCase
+    from app.models.case_study import CaseStudy
+    from app.models.patient import Patient
+    from app.models.plan import ReductionPlan
+    from app.models.review import PlanReview
+    from app.models.segmentation import SegmentationResult
+    from app.models.study import ImagingStudy
+
+    random.seed(42)
+
+    await create_db_engine()
+
+    try:
+        async with get_db_context() as db:
+            first_patient_id = _seed_uuid(profile, "patient-DEMO-PT-001")
+            existing = (
+                await db.execute(select(Patient.id).where(Patient.id == first_patient_id))
+            ).scalar_one_or_none()
             if existing:
-                print("Demo data already exists. Skipping (idempotent).")
+                print(f"{profile} data already exists. Skipping (idempotent).")
                 return
 
         base_date = datetime.now(timezone.utc) - timedelta(days=60)
+        planning_statuses = ("PLANNING", "PLANNED", "REVIEWED", "APPROVED", "ARCHIVED")
 
         async with get_db_context() as db:
-            # ── Create patients ──
+            seeded_users = await _ensure_seed_users(db, profile)
+            primary_surgeon = seeded_users["primary_surgeon"]
+            reviewer = seeded_users["reviewer"]
+
             patient_ids: List[str] = []
-            for i, pt in enumerate(DEMO_PATIENTS):
-                pid = _demo_uuid(f"patient-{pt['patient_id']}")
-                patient_ids.append(pid)
+            for pt in DEMO_PATIENTS:
+                patient_id = _seed_uuid(profile, f"patient-{pt['patient_id']}")
+                patient_ids.append(patient_id)
                 mrn_hash = hashlib.sha256(
-                    f"demo-salt-{pt['patient_id']}".encode()
+                    f"{profile}-salt-{pt['patient_id']}".encode()
                 ).hexdigest()
-                db.add(Patient(
-                    id=pid,
-                    mrn_hash=mrn_hash,
-                    institution_code="DEMO-INST",
-                    age_at_registration=pt["age_at_scan"],
-                    sex=pt["sex"],
-                    created_by="seed_demo_data",
-                    is_active=True,
-                ))
+                db.add(
+                    Patient(
+                        id=patient_id,
+                        mrn_hash=mrn_hash,
+                        institution_code="REL-TEST-INST" if profile == "release_test" else "DEMO-INST",
+                        age_at_registration=pt["age_at_scan"],
+                        sex=pt["sex"],
+                        created_by=primary_surgeon["id"],
+                        is_active=True,
+                    )
+                )
             print(f"  Created {len(patient_ids)} patients")
 
-            # ── Create imaging studies ──
             study_ids: List[str] = []
             for i, (pt, ct) in enumerate(zip(DEMO_PATIENTS, DEMO_CT_STUDIES)):
-                sid = _demo_uuid(f"study-{pt['patient_id']}")
-                study_ids.append(sid)
-                study_uid = generate_study_uid()
-                acq_date = (base_date + timedelta(days=i * 7)).date()
-                db.add(ImagingStudy(
-                    id=sid,
-                    study_uid=study_uid,
-                    patient_id=patient_ids[i],
-                    modality=ct["modality"],
-                    acquisition_date=acq_date,
-                    series_count=random.randint(1, 3),
-                    slice_count=ct["num_slices"],
-                    storage_path=f"/data/demo/studies/{pt['patient_id']}/dicom",
-                    volume_path=f"/data/demo/studies/{pt['patient_id']}/volume.nii.gz",
-                    slice_thickness_mm=ct["slice_thickness_mm"],
-                    pixel_spacing_mm=ct["pixel_spacing_mm"],
-                    kv_peak=ct["kvp"],
-                    body_part_examined="HEAD",
-                    metadata_json={
-                        "manufacturer": ct["manufacturer"],
-                        "model": ct["model"],
-                        "kernel": ct["convolution_kernel"],
-                    },
-                    quality_score=round(random.uniform(0.80, 0.99), 3),
-                    quality_flags=[],
-                    is_deidentified=True,
-                    ingestion_status="complete",
-                    uploaded_by="seed_demo_data",
-                ))
+                study_id = _seed_uuid(profile, f"study-{pt['patient_id']}")
+                study_ids.append(study_id)
+                acquisition_date = (base_date + timedelta(days=i * 7)).date()
+                db.add(
+                    ImagingStudy(
+                        id=study_id,
+                        study_uid=f"1.2.826.0.1.3680043.8.1055.{1 if profile == 'release_test' else 0}.{1000 + i}",
+                        patient_id=patient_ids[i],
+                        modality=ct["modality"],
+                        acquisition_date=acquisition_date,
+                        series_count=max(1, random.randint(1, 3)),
+                        slice_count=ct["num_slices"],
+                        storage_path=f"/data/{profile}/studies/{pt['patient_id']}/dicom",
+                        volume_path=f"/data/{profile}/studies/{pt['patient_id']}/volume.nii.gz",
+                        slice_thickness_mm=ct["slice_thickness_mm"],
+                        pixel_spacing_mm=ct["pixel_spacing_mm"],
+                        kv_peak=ct["kvp"],
+                        body_part_examined="HEAD",
+                        metadata_json={
+                            "StudyDescription": pt["notes"],
+                            "InstitutionName": "Facial Align Demo Hospital",
+                            "Manufacturer": ct["manufacturer"],
+                            "ManufacturerModelName": ct["model"],
+                            "SeriesDescription": "Primary Series",
+                            "SeriesNumber": 1,
+                            "SeriesInstanceUID": f"1.2.826.0.1.3680043.8.1055.series.{1000 + i}",
+                            "kernel": ct["convolution_kernel"],
+                        },
+                        quality_score=round(random.uniform(0.80, 0.99), 3),
+                        quality_flags=[],
+                        is_deidentified=True,
+                        ingestion_status="complete",
+                        uploaded_by=primary_surgeon["id"],
+                    )
+                )
             print(f"  Created {len(study_ids)} imaging studies")
 
-            # ── Create surgical cases ──
             case_ids: List[str] = []
-            case_numbers: List[str] = []
             for i, case_def in enumerate(DEMO_CASES):
-                cid = _demo_uuid(f"case-{i}")
-                case_ids.append(cid)
-                case_num = f"FA-2024-{1001 + i:04d}"
-                case_numbers.append(case_num)
+                case_id = _seed_uuid(profile, f"case-{i}")
+                case_ids.append(case_id)
                 case_date = base_date + timedelta(days=i * 7, hours=random.randint(6, 18))
-                db.add(SurgicalCase(
-                    id=cid,
-                    case_number=case_num,
-                    patient_id=patient_ids[i],
-                    study_id=study_ids[i],
-                    case_type=case_def["case_type"],
-                    status=case_def["status"],
-                    fracture_classification=case_def["fracture_classification"],
-                    planned_procedure=f"ORIF {case_def['fracture_classification']}",
-                    surgeon_id=case_def["surgeon"],
-                    created_by="seed_demo_data",
-                    created_at=case_date,
-                    updated_at=case_date + timedelta(hours=random.randint(1, 48)),
-                ))
+                db.add(
+                    SurgicalCase(
+                        id=case_id,
+                        case_number=_case_number_for_profile(profile, i),
+                        patient_id=patient_ids[i],
+                        study_id=study_ids[i],
+                        case_type=case_def["case_type"],
+                        status=case_def["status"],
+                        fracture_classification=case_def["fracture_classification"],
+                        planned_procedure=f"ORIF {case_def['fracture_classification']}",
+                        surgeon_id=primary_surgeon["id"],
+                        reviewer_id=reviewer["id"] if case_def["status"] in {"REVIEWED", "APPROVED", "ARCHIVED"} else None,
+                        created_by=primary_surgeon["id"],
+                        created_at=case_date,
+                        updated_at=case_date + timedelta(hours=random.randint(1, 48)),
+                        approved_at=(
+                            datetime.now(timezone.utc) - timedelta(days=5)
+                            if case_def["status"] in {"APPROVED", "ARCHIVED"}
+                            else None
+                        ),
+                    )
+                )
+                db.add(
+                    CaseStudy(
+                        id=_seed_uuid(profile, f"case-study-{i}"),
+                        case_id=case_id,
+                        study_id=study_ids[i],
+                        study_role="pre_op",
+                        study_label=f"Primary CT Series {i + 1}",
+                        is_primary=True,
+                        display_order=0,
+                    )
+                )
             print(f"  Created {len(case_ids)} surgical cases")
 
-            # ── Create segmentation results for cases past CREATED/DICOM_PROCESSING ──
             seg_count = 0
             for i, case_def in enumerate(DEMO_CASES):
                 if case_def["status"] in ("CREATED", "DICOM_PROCESSING"):
                     continue
-                seg_id = _demo_uuid(f"seg-{i}")
+
                 seg_result = generate_segmentation_result(SEGMENTATION_STRUCTURES[:15])
                 confidence_scores = {
-                    s: seg_result["structures"][s]["confidence"]
-                    for s in seg_result["structures"]
+                    structure: seg_result["structures"][structure]["confidence"]
+                    for structure in seg_result["structures"]
                 }
                 volume_stats = {
-                    s: {
-                        "volume_cc": round(seg_result["structures"][s]["volume_mm3"] / 1000, 2),
-                        "surface_area_mm2": seg_result["structures"][s]["surface_area_mm2"],
+                    structure: {
+                        "volume_cc": round(seg_result["structures"][structure]["volume_mm3"] / 1000, 2),
+                        "surface_area_mm2": seg_result["structures"][structure]["surface_area_mm2"],
                     }
-                    for s in seg_result["structures"]
+                    for structure in seg_result["structures"]
                 }
-                db.add(SegmentationResult(
-                    id=seg_id,
-                    case_id=case_ids[i],
-                    model_name="totalsegmentator",
-                    model_version="2.0.1",
-                    structure_labels={s: idx + 1 for idx, s in enumerate(SEGMENTATION_STRUCTURES[:15])},
-                    mask_storage_path=f"/data/demo/cases/{case_ids[i]}/segmentation/mask.nii.gz",
-                    confidence_scores=confidence_scores,
-                    overall_confidence=seg_result["overall_confidence"],
-                    inference_time_ms=random.randint(15000, 40000),
-                    total_pipeline_time_ms=random.randint(25000, 60000),
-                    gpu_device="cuda:0",
-                    volume_stats=volume_stats,
-                    fragment_count=len(case_def["fragments"]),
-                    status="complete",
-                    completed_at=datetime.now(timezone.utc) - timedelta(days=random.randint(1, 30)),
-                ))
+                structure_reviews = {
+                    structure: {
+                        "status": "accepted"
+                        if case_def["status"] in {"REVIEWED", "APPROVED", "ARCHIVED"}
+                        else "pending"
+                    }
+                    for structure in SEGMENTATION_STRUCTURES[:15]
+                }
+                db.add(
+                    SegmentationResult(
+                        id=_seed_uuid(profile, f"seg-{i}"),
+                        case_id=case_ids[i],
+                        model_name="totalsegmentator",
+                        model_version="2.0.1",
+                        structure_labels={s: idx + 1 for idx, s in enumerate(SEGMENTATION_STRUCTURES[:15])},
+                        structures=structure_reviews,
+                        mask_storage_path=f"/data/{profile}/cases/{case_ids[i]}/segmentation/mask.nii.gz",
+                        mesh_storage_paths={
+                            structure: {
+                                "glb": f"/data/{profile}/cases/{case_ids[i]}/meshes/{structure}.glb",
+                                "stl": f"/data/{profile}/cases/{case_ids[i]}/meshes/{structure}.stl",
+                            }
+                            for structure in SEGMENTATION_STRUCTURES[:6]
+                        },
+                        confidence_scores=confidence_scores,
+                        overall_confidence=seg_result["overall_confidence"],
+                        provenance=_build_segmentation_provenance(case_def["status"], profile),
+                        inference_time_ms=random.randint(15000, 40000),
+                        total_pipeline_time_ms=random.randint(25000, 60000),
+                        gpu_device="cuda:0",
+                        volume_stats=volume_stats,
+                        fragment_count=len(case_def["fragments"]),
+                        fracture_fragments=[
+                            {
+                                "fragmentId": fragment["id"],
+                                "parentStructure": fragment["structure"],
+                                "volumeCc": round(fragment["volume_mm3"] / 1000, 2),
+                                "centroidMm": [10 + idx * 2, 5 + idx, 0],
+                            }
+                            for idx, fragment in enumerate(case_def["fragments"])
+                        ],
+                        fragment_mesh_paths={
+                            fragment["id"]: {
+                                "glb": f"/data/{profile}/cases/{case_ids[i]}/fragments/{fragment['id']}.glb"
+                            }
+                            for fragment in case_def["fragments"]
+                        },
+                        status="complete",
+                        completed_at=datetime.now(timezone.utc) - timedelta(days=random.randint(1, 30)),
+                    )
+                )
                 seg_count += 1
             print(f"  Created {seg_count} segmentation results")
 
-            # ── Create reduction plans for cases at PLANNING+ ──
             plan_count = 0
-            planning_statuses = ("PLANNING", "PLANNED", "REVIEWED", "APPROVED", "ARCHIVED")
             for i, case_def in enumerate(DEMO_CASES):
                 if case_def["status"] not in planning_statuses:
                     continue
-                plan_id = _demo_uuid(f"plan-{i}")
+
                 plan_data = generate_reduction_plan(case_def["fragments"])
                 transformations = {}
-                for frag in case_def["fragments"]:
-                    fdata = plan_data["fragments"].get(frag["id"], {})
-                    transformations[frag["id"]] = {
-                        "rotation_matrix": fdata.get("rotation_matrix", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
-                        "translation_mm": fdata.get("translation_mm", [0, 0, 0]),
-                        "confidence": fdata.get("confidence", 0.85),
+                for fragment in case_def["fragments"]:
+                    fragment_data = plan_data["fragments"].get(fragment["id"], {})
+                    transformations[fragment["id"]] = {
+                        "transform": {
+                            "rotationMatrix": fragment_data.get("rotation_matrix", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+                            "translationMm": fragment_data.get("translation_mm", [0, 0, 0]),
+                        },
+                        "fragment_label": fragment["structure"],
+                        "confidence": fragment_data.get("confidence", 0.85),
                     }
+
                 is_approved = case_def["status"] in ("APPROVED", "ARCHIVED")
                 plan_status_map = {
                     "PLANNING": "draft",
@@ -619,34 +925,104 @@ async def seed_to_database() -> None:
                     "APPROVED": "approved",
                     "ARCHIVED": "approved",
                 }
-                db.add(ReductionPlan(
-                    id=plan_id,
-                    case_id=case_ids[i],
-                    plan_version=1,
-                    model_name="baseline_icp",
-                    model_version="1.0.0",
-                    fragments={
-                        f["id"]: {"label": f["structure"], "volume_cc": round(f["volume_mm3"] / 1000, 2)}
-                        for f in case_def["fragments"]
-                    },
-                    transformations=transformations,
-                    confidence_score=round(random.uniform(0.75, 0.95), 3),
-                    validation_passed=case_def["status"] != "PLANNING",
-                    validation_warnings=[],
-                    surgeon_approved=is_approved,
-                    is_ml_generated=True,
-                    status=plan_status_map.get(case_def["status"], "draft"),
-                    generation_time_ms=random.randint(2000, 8000),
-                    approved_at=(
-                        datetime.now(timezone.utc) - timedelta(days=random.randint(1, 10))
-                        if is_approved else None
-                    ),
-                    approved_by="demo-surgeon-001" if is_approved else None,
-                ))
+                db.add(
+                    ReductionPlan(
+                        id=_seed_uuid(profile, f"plan-{i}"),
+                        case_id=case_ids[i],
+                        segmentation_id=_seed_uuid(profile, f"seg-{i}"),
+                        plan_version=1,
+                        model_name="baseline_icp",
+                        model_version="1.0.0",
+                        fragments={
+                            fragment["id"]: {
+                                "label": fragment["structure"],
+                                "fragmentLabel": fragment["structure"],
+                                "parentStructure": fragment["structure"],
+                                "volumeCc": round(fragment["volume_mm3"] / 1000, 2),
+                                "centroidMm": [10 + idx * 2, 5 + idx, 0],
+                            }
+                            for idx, fragment in enumerate(case_def["fragments"])
+                        },
+                        transformations=transformations,
+                        dental_constraints={
+                            "targetOverjetMm": 2.0,
+                            "targetOverbiteMm": 3.0,
+                            "midlineToleranceMm": 1.0,
+                            "cantToleranceDegrees": 2.0,
+                            "bilateralCondylarSeating": True,
+                        },
+                        occlusal_metrics={
+                            "overjetMm": 2.4,
+                            "overbiteMm": 2.8,
+                            "midlineDeviationMm": 0.6 if case_def["status"] != "PLANNING" else 1.4,
+                            "cantDegrees": 1.1 if case_def["status"] != "PLANNING" else 2.4,
+                            "molarRelationship": "Class_I",
+                        },
+                        provenance=_build_plan_provenance(case_def["status"], profile),
+                        confidence_score=round(random.uniform(0.75, 0.95), 3),
+                        validation_passed=case_def["status"] != "PLANNING",
+                        validation_warnings=(
+                            ["Manual review recommended before approval."]
+                            if case_def["status"] in {"PLANNING", "REVIEWED"}
+                            else []
+                        ),
+                        surgeon_approved=is_approved,
+                        is_ml_generated=False,
+                        status=plan_status_map.get(case_def["status"], "draft"),
+                        generation_time_ms=random.randint(2000, 8000),
+                        approved_at=(
+                            datetime.now(timezone.utc) - timedelta(days=random.randint(1, 10))
+                            if is_approved
+                            else None
+                        ),
+                        approved_by=reviewer["id"] if is_approved else None,
+                    )
+                )
                 plan_count += 1
             print(f"  Created {plan_count} reduction plans")
 
-        print("\nDatabase seeding complete.")
+            review_count = 0
+            for i, case_def in enumerate(DEMO_CASES):
+                if case_def["status"] not in planning_statuses:
+                    continue
+
+                decision, notes, signature = _build_review_state(case_def["status"])
+                db.add(
+                    PlanReview(
+                        id=_seed_uuid(profile, f"review-{i}"),
+                        case_id=case_ids[i],
+                        plan_id=_seed_uuid(profile, f"plan-{i}"),
+                        reviewer_id=reviewer["id"],
+                        reviewer_name=reviewer["full_name"],
+                        decision=decision,
+                        notes=notes,
+                        checklist=[
+                            {
+                                **dict(item),
+                                "passed": (
+                                    True
+                                    if decision == "approved"
+                                    else False
+                                    if decision == "revision_requested" and item["severity"] == "required"
+                                    else None
+                                ),
+                            }
+                            for item in DEFAULT_CHECKLIST
+                        ],
+                        signature=signature,
+                        signed_at=(
+                            datetime.now(timezone.utc) - timedelta(days=2)
+                            if decision == "approved"
+                            else None
+                        ),
+                        created_at=base_date + timedelta(days=i * 7, hours=4),
+                        updated_at=base_date + timedelta(days=i * 7, hours=8),
+                    )
+                )
+                review_count += 1
+            print(f"  Created {review_count} plan reviews")
+
+        print(f"\nDatabase seeding complete for profile '{profile}'.")
 
     finally:
         await dispose_db_engine()
@@ -660,16 +1036,28 @@ def main():
     parser.add_argument("--db", action="store_true", help="Write directly to database via async SQLAlchemy")
     parser.add_argument("--output", "-o", type=str, default=None, help="Write to JSON file")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+    parser.add_argument(
+        "--profile",
+        choices=["demo", "release_test"],
+        default="demo",
+        help="Seed profile to generate or write",
+    )
     args = parser.parse_args()
 
-    if args.db:
-        print("Seeding demo data directly to database...")
-        asyncio.run(seed_to_database())
+    if args.clear:
+        print(f"Clearing {args.profile} seed data from database...")
+        asyncio.run(_clear_seed_data(args.profile))
         print("Done.")
         return
 
-    print("Generating demo dataset...")
-    dataset = build_demo_dataset()
+    if args.db:
+        print(f"Seeding {args.profile} data directly to database...")
+        asyncio.run(seed_to_database(args.profile))
+        print("Done.")
+        return
+
+    print(f"Generating {args.profile} dataset...")
+    dataset = build_demo_dataset(args.profile)
 
     print(f"  Created {len(dataset['patients'])} patients")
     print(f"  Created {len(dataset['cases'])} cases")
@@ -690,7 +1078,8 @@ def main():
         print(f"\nWritten to {output_path}")
     else:
         # Write to default location
-        output_path = Path(__file__).parent.parent / "examples" / "demo_dataset.json"
+        suffix = "release_test_dataset.json" if args.profile == "release_test" else "demo_dataset.json"
+        output_path = Path(__file__).parent.parent / "examples" / suffix
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w") as f:
             json.dump(dataset, f, indent=2, default=str)

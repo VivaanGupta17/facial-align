@@ -31,7 +31,7 @@ export function useGeneratePlan(caseId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => planningApi.generatePlan(caseId),
-    onSuccess: (data) => {
+    onSuccess: () => {
       // generatePlan now returns { jobId, planId } (202 async), not a plan.
       // Invalidate versions so the UI re-fetches once the plan is ready.
       // The component should poll /jobs/{jobId} or listen via WebSocket

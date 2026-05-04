@@ -182,7 +182,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
             path=str(request.url.path),
         )
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
                 "error": "VALIDATION_ERROR",
                 "message": "Request validation failed",

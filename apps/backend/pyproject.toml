@@ -38,7 +38,7 @@ dependencies = [
 
     # ── Authentication & Security ─────────────────────────────────────────────
     "python-jose[cryptography]>=3.3.0",
-    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.1,<5",
     "cryptography>=42.0.5",
 
     # ── Logging ───────────────────────────────────────────────────────────────
@@ -78,6 +78,8 @@ dependencies = [
 
     # ── File utilities ────────────────────────────────────────────────────────
     "python-magic>=0.4.27",        # MIME type detection
+    "requests>=2.31.0",            # HTTP requests for downloads
+    "tqdm>=4.66.0",                # Progress bars
     "pillow>=10.3.0",              # image conversion (slice exports)
 ]
 

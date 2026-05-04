@@ -9,9 +9,17 @@ on:
 env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "20"
+  DB_HOST: 127.0.0.1
+  DB_PORT: "5432"
+  DB_NAME: facial_align_test
+  DB_USER: test
+  DB_PASSWORD: test
+  CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+  CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/1
+  MODEL_DEFAULT_DEVICE: cpu
+  PLAYWRIGHT_BASE_URL: http://127.0.0.1:4173
 
 jobs:
-  # ── Backend Tests ──────────────────────────────────────────
   backend-lint:
     name: Backend Lint
     runs-on: ubuntu-latest
@@ -20,11 +28,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies
-        working-directory: apps/backend
+      - name: Install backend dependencies
         run: |
-          pip install ruff mypy
-          pip install -e ".[dev]"
+          python -m pip install --upgrade pip
+          pip install -e "./apps/backend[dev]"
       - name: Ruff lint
         working-directory: apps/backend
         run: ruff check .
@@ -35,8 +42,8 @@ jobs:
         working-directory: apps/backend
         run: mypy app/ --ignore-missing-imports
 
-  backend-test:
-    name: Backend Tests
+  backend-api-tests:
+    name: Backend API Tests
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -66,64 +73,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies
-        working-directory: apps/backend
-        run: pip install -e ".[dev]"
-      - name: Run tests
-        working-directory: apps/backend
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./apps/backend[dev]"
+      - name: Run backend API suites
         env:
-          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/facial_align_test
-          REDIS_URL: redis://localhost:6379/0
-          INFERENCE_DEVICE: cpu
-        run: pytest tests/ -v --tb=short -x
+          ENVIRONMENT: test
+          PYTHONPATH: apps/backend:.
+        run: |
+          pytest \
+            tests/unit/backend/test_auth_endpoints.py \
+            tests/unit/backend/test_cases_api.py \
+            tests/unit/backend/test_dicom_api.py \
+            tests/unit/backend/test_segmentation_api.py \
+            tests/unit/backend/test_planning_api.py \
+            tests/unit/backend/test_reviews_api.py \
+            tests/unit/backend/test_viewer_api.py \
+            tests/unit/backend/test_jobs_api.py \
+            tests/unit/backend/test_health_api.py \
+            tests/unit/backend/test_capabilities_api.py \
+            tests/unit/backend/test_api_contract.py \
+            tests/unit/backend/test_websocket.py
 
-  # ── Frontend Tests ─────────────────────────────────────────
-  frontend-lint:
-    name: Frontend Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Install dependencies
-        working-directory: apps/frontend
-        run: npm ci
-      - name: TypeScript check
-        working-directory: apps/frontend
-        run: npx tsc --noEmit
-      - name: ESLint
-        working-directory: apps/frontend
-        run: npx eslint src/ --ext .ts,.tsx
-
-  frontend-build:
-    name: Frontend Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Install dependencies
-        working-directory: apps/frontend
-        run: npm ci
-      - name: Build
-        working-directory: apps/frontend
-        run: npm run build
-
-  # ── Docker Build ───────────────────────────────────────────
-  docker-build:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: [backend-lint, backend-test, frontend-build]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build backend image
-        run: docker build -t facial-align-backend -f apps/backend/Dockerfile .
-      - name: Build frontend image
-        run: docker build -t facial-align-frontend -f apps/frontend/Dockerfile apps/frontend/
-
-  # ── Pipeline Tests ─────────────────────────────────────────
   pipeline-test:
     name: Pipeline Tests
     runs-on: ubuntu-latest
@@ -132,10 +104,165 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install dependencies
-        working-directory: apps/backend
-        run: pip install -e ".[dev]"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./apps/backend[dev]"
       - name: Run pipeline tests
         env:
           INFERENCE_DEVICE: cpu
-        run: pytest tests/unit/pipelines/ -v --tb=short
+          PYTHONPATH: apps/backend:.
+        run: pytest tests/unit/pipelines -v --tb=short
+
+  frontend-quality:
+    name: Frontend Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: apps/frontend
+        run: npm ci
+      - name: Lint
+        working-directory: apps/frontend
+        run: npm run lint
+      - name: Type check
+        working-directory: apps/frontend
+        run: npm run type-check
+      - name: Unit and component tests
+        working-directory: apps/frontend
+        run: npm run test -- --run
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    needs: [frontend-quality]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: apps/frontend
+        run: npm ci
+      - name: Build
+        working-directory: apps/frontend
+        run: npm run build
+
+  frontend-e2e:
+    name: Frontend E2E
+    runs-on: ubuntu-latest
+    needs: [backend-api-tests, frontend-quality]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: facial_align_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/frontend/package-lock.json
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./apps/backend[dev]"
+      - name: Install frontend dependencies
+        working-directory: apps/frontend
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: apps/frontend
+        run: npx playwright install --with-deps chromium
+      - name: Migrate database
+        working-directory: apps/backend
+        env:
+          ENVIRONMENT: test
+          PYTHONPATH: ../backend:../..
+        run: alembic upgrade head
+      - name: Seed deterministic release-test data
+        env:
+          ENVIRONMENT: test
+          PYTHONPATH: apps/backend:.
+        run: python scripts/seed_demo_data.py --db --profile release_test
+      - name: Start backend API
+        working-directory: apps/backend
+        env:
+          ENVIRONMENT: test
+          PYTHONPATH: ../backend:../..
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/facial-align-backend.log 2>&1 &
+          echo $! > /tmp/facial-align-backend.pid
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:8000/api/v1/health/live > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/facial-align-backend.log
+          exit 1
+      - name: Start frontend Vite dev server
+        working-directory: apps/frontend
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 4173 > /tmp/facial-align-frontend.log 2>&1 &
+          echo $! > /tmp/facial-align-frontend.pid
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:4173 > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/facial-align-frontend.log
+          exit 1
+      - name: Run Playwright suite
+        working-directory: apps/frontend
+        run: npm run test:e2e
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            apps/frontend/playwright-report
+            apps/frontend/test-results
+            /tmp/facial-align-backend.log
+            /tmp/facial-align-frontend.log
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [backend-lint, backend-api-tests, pipeline-test, frontend-quality, frontend-build, frontend-e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t facial-align-backend -f apps/backend/Dockerfile .
+      - name: Build frontend image
+        run: docker build -t facial-align-frontend -f apps/frontend/Dockerfile apps/frontend/

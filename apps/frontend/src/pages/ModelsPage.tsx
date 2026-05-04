@@ -1,36 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import { BoxSelect, CheckCircle, AlertTriangle, XCircle, Clock } from 'lucide-react'
+import { BoxSelect, AlertTriangle, CheckCircle2, FlaskConical, ShieldCheck } from 'lucide-react'
 import { dashboardApi } from '../lib/api'
 import { PageLoading, ErrorState } from '../components/common/LoadingOverlay'
-import type { ModelInfo } from '../types/medical'
+import PageHeader from '../components/common/PageHeader'
+import { CapabilityBadge } from '../components/common/TrustIndicators'
 
-function StatusBadge({ model }: { model: ModelInfo }) {
-  const accuracy = model.accuracy
-  const status = accuracy >= 0.95 ? 'excellent' : accuracy >= 0.9 ? 'good' : accuracy >= 0.8 ? 'adequate' : 'degraded'
-  const config = {
-    excellent: { icon: <CheckCircle size={12} />, className: 'text-emerald-400 bg-emerald-950 border-emerald-800', label: 'Loaded' },
-    good: { icon: <CheckCircle size={12} />, className: 'text-cyan-400 bg-cyan-950 border-cyan-800', label: 'Available' },
-    adequate: { icon: <AlertTriangle size={12} />, className: 'text-amber-400 bg-amber-950 border-amber-800', label: 'Available' },
-    degraded: { icon: <XCircle size={12} />, className: 'text-red-400 bg-red-950 border-red-800', label: 'Error' },
-  }[status]
-  return (
-    <span className={`inline-flex items-center gap-1 text-2xs font-semibold px-1.5 py-0.5 rounded border ${config.className}`}>
-      {config.icon} {config.label}
-    </span>
-  )
-}
-
-function TypeBadge({ type }: { type: ModelInfo['type'] }) {
-  const config = {
-    segmentation: 'text-blue-400 bg-blue-950 border-blue-800',
-    planning: 'text-purple-400 bg-purple-950 border-purple-800',
-    occlusion: 'text-amber-400 bg-amber-950 border-amber-800',
-  }[type]
-  return (
-    <span className={`text-2xs font-semibold px-1.5 py-0.5 rounded border ${config}`}>
-      {type}
-    </span>
-  )
+function titleize(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 export default function ModelsPage() {
@@ -40,93 +18,192 @@ export default function ModelsPage() {
     staleTime: 30_000,
   })
 
-  if (isLoading) return <PageLoading label="Loading model registry..." />
-  if (error) return <ErrorState description="Failed to load model information" />
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 flex-col p-6 animate-fade-in" data-testid="models-page">
+        <PageLoading label="Loading capability registry..." />
+      </div>
+    )
+  }
 
-  const models = health?.models ?? []
+  if (error || !health) {
+    return (
+      <div className="flex flex-1 flex-col p-6 animate-fade-in" data-testid="models-page">
+        <ErrorState description="Failed to load model and capability information" />
+      </div>
+    )
+  }
+
+  const capabilities = health.capabilities
+  const readyCount = capabilities.filter((capability) => capability.status === 'available').length
+  const betaCount = capabilities.filter((capability) => capability.betaStatus !== 'not_beta').length
+  const warningCount = capabilities.reduce((count, capability) => count + capability.warnings.length, 0)
 
   return (
-    <div className="flex-1 flex flex-col p-6 animate-fade-in" data-testid="models-page">
-      <div className="flex items-center gap-3 mb-6">
-        <BoxSelect size={20} className="text-cyan-400" />
-        <h1 className="text-lg font-semibold text-slate-100">ML Model Registry</h1>
-        <span className="text-sm text-slate-500 font-mono">{models.length} models</span>
+    <div className="flex flex-1 flex-col p-6 animate-fade-in" data-testid="models-page">
+      <PageHeader
+        eyebrow="Algorithm Registry"
+        title="Models And Capability Status"
+        description="This registry shows what the deployment can actually run today. It distinguishes deterministic baselines, learned beta paths, artifact readiness, and any warnings that affect research use."
+        chips={[
+          {
+            label: `${readyCount}/${capabilities.length} capabilities ready`,
+            tone: readyCount === capabilities.length ? 'success' : 'warning',
+            icon: readyCount === capabilities.length ? <ShieldCheck size={12} /> : <FlaskConical size={12} />,
+          },
+          {
+            label: `${betaCount} beta paths visible`,
+            tone: betaCount > 0 ? 'warning' : 'neutral',
+            icon: <BoxSelect size={12} />,
+          },
+          {
+            label: `${warningCount} warnings`,
+            tone: warningCount > 0 ? 'warning' : 'neutral',
+            icon: <AlertTriangle size={12} />,
+          },
+        ]}
+      />
+
+      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="hero-stat">
+          <p className="hero-stat-label">Deterministic Baselines</p>
+          <p className="hero-stat-value">
+            {capabilities.filter((capability) => capability.validationTier === 'deterministic_baseline').length}
+          </p>
+          <p className="mt-2 text-sm text-slate-500">
+            Guaranteed paths the platform can fall back to when learned artifacts are unavailable.
+          </p>
+        </div>
+        <div className="hero-stat">
+          <p className="hero-stat-label">Learned Beta Paths</p>
+          <p className="hero-stat-value">
+            {capabilities.filter((capability) => capability.validationTier === 'learned_beta').length}
+          </p>
+          <p className="mt-2 text-sm text-slate-500">
+            Exposed to users, but explicitly labeled as beta and not clinically validated in this UI.
+          </p>
+        </div>
+        <div className="hero-stat">
+          <p className="hero-stat-label">Artifact Ready</p>
+          <p className="hero-stat-value">
+            {capabilities.filter((capability) => capability.artifactReady || !capability.artifactRequired).length}
+          </p>
+          <p className="mt-2 text-sm text-slate-500">
+            Subsystems that have the assets needed to run without falling back to a manual or baseline path.
+          </p>
+        </div>
       </div>
 
-      {/* Model cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
-        {models.map(model => (
-          <div
-            key={model.name}
-            className="bg-slate-800 border border-slate-700 rounded-lg p-5 hover:border-slate-600 transition-colors"
-            data-testid={`model-card-${model.name}`}
-          >
-            <div className="flex items-start justify-between mb-3">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-100">{model.name}</h3>
-                <p className="text-xs text-slate-500 font-mono mt-0.5">v{model.version}</p>
-              </div>
-              <StatusBadge model={model} />
+      <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.9fr]">
+        <div className="surface-card overflow-hidden">
+          <div className="panel-header">
+            <div className="flex items-center gap-2">
+              <BoxSelect size={15} className="text-cyan-400" />
+              <h2 className="panel-title">Capability Registry</h2>
             </div>
-            <div className="flex items-center gap-3 mb-3">
-              <TypeBadge type={model.type} />
-              <div className="flex items-center gap-1 text-xs text-slate-500">
-                <Clock size={11} />
-                <span className="font-mono">{new Date(model.lastUpdated).toLocaleDateString()}</span>
-              </div>
+            <span className="text-xs text-slate-500">{capabilities.length} subsystem entries</span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="data-table w-full" data-testid="models-table">
+              <thead>
+                <tr>
+                  <th>Subsystem</th>
+                  <th>Category</th>
+                  <th>Validation Tier</th>
+                  <th>Beta Status</th>
+                  <th>Artifacts</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {capabilities.map((capability) => (
+                  <tr key={capability.name}>
+                    <td>
+                      <div>
+                        <p className="text-sm font-medium text-slate-200">{titleize(capability.name)}</p>
+                        <p className="text-xs font-mono text-slate-500">
+                          {capability.modelVersion ?? 'No model version declared'}
+                        </p>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="text-xs text-slate-400">{titleize(capability.category)}</span>
+                    </td>
+                    <td>
+                      <span className="text-xs text-slate-300">{titleize(capability.validationTier)}</span>
+                    </td>
+                    <td>
+                      <span className="text-xs text-slate-300">{titleize(capability.betaStatus)}</span>
+                    </td>
+                    <td>
+                      <span className="text-xs text-slate-400">
+                        {capability.artifactRequired
+                          ? capability.artifactReady
+                            ? 'Ready'
+                            : 'Missing artifact'
+                          : 'Not required'}
+                      </span>
+                    </td>
+                    <td>
+                      <CapabilityBadge capability={capability} compact />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="surface-card p-5">
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={16} className="text-emerald-400" />
+              <h2 className="text-sm font-semibold text-slate-100">Operator Reading Guide</h2>
             </div>
-            <div className="bg-slate-900 rounded-md p-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs text-slate-400">Accuracy</span>
-                <span className="text-sm font-mono font-bold text-slate-100">
-                  {(model.accuracy * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all ${
-                    model.accuracy >= 0.95 ? 'bg-emerald-500' :
-                    model.accuracy >= 0.9 ? 'bg-cyan-500' :
-                    model.accuracy >= 0.8 ? 'bg-amber-500' : 'bg-red-500'
-                  }`}
-                  style={{ width: `${model.accuracy * 100}%` }}
-                />
-              </div>
+            <div className="mt-4 space-y-3 text-sm text-slate-400">
+              <p>
+                <span className="text-slate-200">Available</span> means the platform can run that subsystem today with a declared path and the required assets.
+              </p>
+              <p>
+                <span className="text-slate-200">Degraded</span> means the subsystem can still run, but it is using a fallback, a reduced path, or has warnings attached.
+              </p>
+              <p>
+                <span className="text-slate-200">Unavailable</span> means the UI should not imply that this capability is ready for production use.
+              </p>
             </div>
           </div>
-        ))}
-      </div>
 
-      {/* Detailed table */}
-      <div className="flex-1 overflow-auto rounded-lg border border-slate-800">
-        <table className="w-full text-sm" data-testid="models-table">
-          <thead className="bg-slate-800/50 sticky top-0">
-            <tr>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Model Name</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Version</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Type</th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Accuracy</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Last Updated</th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800">
-            {models.map(model => (
-              <tr key={model.name} className="hover:bg-slate-800/30 transition-colors">
-                <td className="px-4 py-3 text-sm font-medium text-slate-200">{model.name}</td>
-                <td className="px-4 py-3 text-xs font-mono text-slate-400">v{model.version}</td>
-                <td className="px-4 py-3"><TypeBadge type={model.type} /></td>
-                <td className="px-4 py-3 text-right text-sm font-mono text-slate-200">
-                  {(model.accuracy * 100).toFixed(1)}%
-                </td>
-                <td className="px-4 py-3 text-xs font-mono text-slate-400">
-                  {new Date(model.lastUpdated).toLocaleDateString()}
-                </td>
-                <td className="px-4 py-3 text-center"><StatusBadge model={model} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          <div className="surface-card p-5">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-cyan-400" />
+              <h2 className="text-sm font-semibold text-slate-100">Current Warnings</h2>
+            </div>
+            <div className="mt-4 space-y-2">
+              {capabilities.some((capability) => capability.warnings.length > 0) ? (
+                capabilities
+                  .filter((capability) => capability.warnings.length > 0)
+                  .map((capability) => (
+                    <div key={capability.name} className="surface-card-muted px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        {titleize(capability.name)}
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {capability.warnings.map((warning) => (
+                          <div key={warning} className="flex items-start gap-2 text-sm text-slate-400">
+                            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+                            <span>{warning}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+              ) : (
+                <p className="text-sm text-slate-500">No active capability warnings reported by the backend.</p>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )

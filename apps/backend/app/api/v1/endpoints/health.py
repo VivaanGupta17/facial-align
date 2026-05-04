@@ -107,7 +107,9 @@ async def health_check(request: Request) -> HealthCheck:
     # ── Celery / Redis ──
     try:
         from app.workers.celery_app import celery_app
-        inspect = celery_app.control.inspect(timeout=2.0)
+        # Keep the UI-facing health endpoint responsive even when no workers are
+        # attached. The clinician shell polls this endpoint frequently.
+        inspect = celery_app.control.inspect(timeout=0.25)
         stats = inspect.stats()
         worker_count = len(stats) if stats else 0
         components.append(ComponentHealth(

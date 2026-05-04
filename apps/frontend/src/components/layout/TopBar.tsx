@@ -1,5 +1,5 @@
-import { useLocation, useNavigate, Link } from 'react-router-dom'
-import { ChevronRight, Cpu, AlertCircle, CheckCircle, RefreshCw, Bell, User, Settings, LogOut } from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { ChevronRight, Cpu, CheckCircle, RefreshCw, Bell, User, Settings, LogOut, FlaskConical, ShieldCheck } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { dashboardApi, authApi } from '../../lib/api'
@@ -80,6 +80,33 @@ function CaseStatusBadge() {
   )
 }
 
+function CapabilitySummaryPill({
+  available,
+  total,
+}: {
+  available: number
+  total: number
+}) {
+  const healthy = total > 0 && available === total
+  const mixed = available > 0 && available < total
+
+  return (
+    <div
+      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
+        healthy
+          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+          : mixed
+          ? 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+          : 'border-slate-600/40 bg-slate-800/60 text-slate-400'
+      }`}
+      data-testid="capability-summary-pill"
+    >
+      {healthy ? <ShieldCheck size={12} /> : <FlaskConical size={12} />}
+      <span>{available}/{total} core capabilities ready</span>
+    </div>
+  )
+}
+
 export default function TopBar() {
   const navigate = useNavigate()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
@@ -98,6 +125,10 @@ export default function TopBar() {
 
   const maxGpuUtil = health?.gpus.reduce((m, g) => Math.max(m, g.utilizationPercent), 0) ?? 0
   const queueDepth = health?.queue.depth ?? 0
+  const coreCapabilities = health?.capabilities.filter((capability) =>
+    ['segmentation', 'planning', 'landmarks', 'occlusion'].includes(capability.category)
+  ) ?? []
+  const availableCapabilities = coreCapabilities.filter((capability) => capability.status === 'available').length
 
   // Close user menu on click outside
   useEffect(() => {
@@ -109,7 +140,7 @@ export default function TopBar() {
 
   return (
     <header
-      className="h-[52px] flex items-center justify-between px-4 bg-slate-900 border-b border-slate-800 shrink-0"
+      className="flex h-[72px] shrink-0 items-center justify-between border-b border-white/10 bg-[rgba(8,14,26,0.72)] px-5 backdrop-blur-xl"
       data-testid="topbar"
     >
       {/* Left: breadcrumbs + status */}
@@ -120,9 +151,15 @@ export default function TopBar() {
 
       {/* Right: system info + user */}
       <div className="flex items-center gap-2">
+        {coreCapabilities.length > 0 && (
+          <div className="hidden xl:block">
+            <CapabilitySummaryPill available={availableCapabilities} total={coreCapabilities.length} />
+          </div>
+        )}
+
         {/* Queue indicator */}
         {queueDepth > 0 && (
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-mono text-blue-400 bg-blue-950 border-blue-800" data-testid="queue-indicator">
+          <div className="flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/10 px-2.5 py-1 text-xs font-mono text-blue-300" data-testid="queue-indicator">
             <RefreshCw size={12} className="animate-spin" />
             <span>{queueDepth} queued</span>
           </div>
@@ -132,13 +169,13 @@ export default function TopBar() {
         {health && <GpuStatusPill utilizationPct={maxGpuUtil} />}
 
         {/* API health */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-mono text-emerald-400 bg-emerald-950 border-emerald-800" data-testid="api-health">
+        <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-mono text-emerald-300" data-testid="api-health">
           <CheckCircle size={12} />
           <span>API {health?.apiLatencyMs ?? '--'}ms</span>
         </div>
 
         {/* Divider */}
-        <div className="w-px h-5 bg-slate-700" />
+        <div className="h-5 w-px bg-white/10" />
 
         {/* Notifications */}
         <button className="relative p-2 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors" data-testid="notifications-btn" aria-label="Notifications">
@@ -164,27 +201,27 @@ export default function TopBar() {
 
           {userMenuOpen && (
             <div
-              className="absolute right-0 top-full mt-1 w-52 bg-slate-800 border border-slate-700 rounded-lg shadow-panel py-1 z-50 animate-fade-in"
+              className="absolute right-0 top-full z-50 mt-2 w-52 rounded-2xl border border-white/10 bg-[rgba(19,32,51,0.96)] py-1 shadow-2xl animate-fade-in"
               data-testid="user-menu"
             >
-              <div className="px-4 py-2.5 border-b border-slate-700">
+              <div className="border-b border-white/10 px-4 py-2.5">
                 <p className="text-sm font-semibold text-slate-100">{currentUser?.full_name ?? 'User'}</p>
                 <p className="text-xs text-slate-400">{currentUser?.email ?? ''}</p>
               </div>
-              <button className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 transition-colors">
+              <button className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/5">
                 <User size={14} /> Profile
               </button>
-              <button className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 transition-colors">
+              <button className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/5">
                 <Settings size={14} /> Preferences
               </button>
-              <div className="border-t border-slate-700 mt-1 pt-1">
+              <div className="mt-1 border-t border-white/10 pt-1">
                 <button
                   onClick={() => {
                     localStorage.removeItem('auth_token')
                     localStorage.removeItem('refresh_token')
                     navigate('/login', { replace: true })
                   }}
-                  className="flex items-center gap-2.5 w-full px-4 py-2 text-sm text-red-400 hover:bg-slate-700 transition-colors"
+                  className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-red-400 transition-colors hover:bg-white/5"
                 >
                   <LogOut size={14} /> Sign out
                 </button>

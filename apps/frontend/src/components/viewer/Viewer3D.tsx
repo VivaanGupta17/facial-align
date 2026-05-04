@@ -1,6 +1,6 @@
-import { useRef, Suspense, useCallback } from 'react'
+import { useRef, Suspense, useCallback, useEffect, useMemo, useState, type RefObject } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
-import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Environment, Stats } from '@react-three/drei'
+import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import * as THREE from 'three'
 import { useViewerStore, CAMERA_PRESETS } from '../../stores/viewerStore'
 import { usePlanningStore } from '../../stores/planningStore'
@@ -8,18 +8,52 @@ import AnatomyMesh from './AnatomyMesh'
 import ViewerToolbar from './ViewerToolbar'
 import type { SegmentedStructure, FragmentTransform, StructureLabel } from '../../types/medical'
 
+const VIEW_MODE_PRESET_MAP = {
+  axial: 'superior',
+  coronal: 'anterior',
+  sagittal: 'lateral_r',
+} as const
+
 // ---------------------------
 // Structures panel (sidebar)
 // ---------------------------
 function StructuresPanel({ structures }: { structures: SegmentedStructure[] }) {
-  const { viewerState, setStructureVisible, setStructureOpacity, setStructureWireframe, setSelectedFragment } = useViewerStore()
-  const { selectedFragmentId, selectFragment } = usePlanningStore()
+  const {
+    viewerState,
+    setStructureVisible,
+    setStructureOpacity,
+    setStructureWireframe,
+    setSelectedFragment,
+    isolateStructure,
+    showAllStructures,
+  } = useViewerStore()
+  const { selectFragment } = usePlanningStore()
+  const selectedStructureId = structures.some((structure) => structure.label === viewerState.selectedFragmentId)
+    ? viewerState.selectedFragmentId
+    : null
 
   return (
-    <div className="w-56 bg-slate-900 border-l border-slate-800 flex flex-col" data-testid="structures-panel">
+    <div className="flex w-64 flex-col border-l border-white/10 bg-[rgba(8,14,26,0.92)] backdrop-blur-xl" data-testid="structures-panel">
       <div className="panel-header py-2.5">
         <span className="text-xs font-semibold text-slate-300">Structures</span>
         <span className="text-2xs font-mono text-slate-500">{structures.length}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 border-b border-white/10 px-3 py-2">
+        <button
+          onClick={showAllStructures}
+          className="rounded-xl border border-white/10 bg-[rgba(15,23,42,0.7)] px-2 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/5"
+          data-testid="show-all-structures"
+        >
+          Show All
+        </button>
+        <button
+          onClick={() => selectedStructureId && isolateStructure(selectedStructureId as StructureLabel)}
+          disabled={!selectedStructureId}
+          className="rounded-xl border border-white/10 bg-[rgba(15,23,42,0.7)] px-2 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
+          data-testid="isolate-selected-structure"
+        >
+          Isolate
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto py-1">
         {structures.map(s => {
@@ -28,8 +62,8 @@ function StructuresPanel({ structures }: { structures: SegmentedStructure[] }) {
           return (
             <div
               key={s.label}
-              className={`px-3 py-2 border-b border-slate-800 last:border-b-0 cursor-pointer transition-colors ${
-                selectedFragmentId === s.label ? 'bg-cyan-950/30 border-l-2 border-l-cyan-500' : 'hover:bg-slate-800/50'
+              className={`border-b border-white/5 px-3 py-2 last:border-b-0 cursor-pointer transition-colors ${
+                selectedStructureId === s.label ? 'bg-cyan-950/30 border-l-2 border-l-cyan-500' : 'hover:bg-slate-800/50'
               }`}
               onClick={() => { setSelectedFragment(s.label); selectFragment(s.label) }}
               data-testid={`structure-row-${s.label}`}
@@ -46,8 +80,20 @@ function StructuresPanel({ structures }: { structures: SegmentedStructure[] }) {
                 {/* Color swatch */}
                 <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
                 {/* Name */}
-                <span className={`text-xs flex-1 truncate ${selectedFragmentId === s.label ? 'text-cyan-300 font-semibold' : 'text-slate-300'}`} title={s.displayName}>{s.displayName}</span>
-                {selectedFragmentId === s.label && (
+                <span className={`text-xs flex-1 truncate ${selectedStructureId === s.label ? 'text-cyan-300 font-semibold' : 'text-slate-300'}`} title={s.displayName}>{s.displayName}</span>
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setStructureWireframe(s.label, !vis.wireframe)
+                  }}
+                  className={`rounded px-1 py-0.5 text-[10px] font-semibold transition-colors ${
+                    vis.wireframe ? 'bg-cyan-900 text-cyan-300' : 'bg-slate-800 text-slate-500 hover:text-slate-300'
+                  }`}
+                  data-testid={`wireframe-toggle-${s.label}`}
+                >
+                  WF
+                </button>
+                {selectedStructureId === s.label && (
                   <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" />
                 )}
               </div>
@@ -98,6 +144,96 @@ function CameraPresetButtons() {
   )
 }
 
+function computeFitDistance(box: THREE.Box3, camera: THREE.PerspectiveCamera) {
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z, 1)
+  const fov = THREE.MathUtils.degToRad(camera.fov)
+  return Math.max((maxDim / (2 * Math.tan(fov / 2))) * 1.4, 16)
+}
+
+function SceneCameraController({
+  contentRef,
+  controlsRef,
+  viewMode,
+  cameraPreset,
+  zoomFitNonce,
+  zoomInNonce,
+  zoomOutNonce,
+}: {
+  contentRef: RefObject<THREE.Group>
+  controlsRef: RefObject<any>
+  viewMode: '3d' | 'axial' | 'coronal' | 'sagittal'
+  cameraPreset: string
+  zoomFitNonce: number
+  zoomInNonce: number
+  zoomOutNonce: number
+}) {
+  const { camera } = useThree()
+  const perspectiveCamera = camera as THREE.PerspectiveCamera
+
+  const getBounds = useCallback(() => {
+    const group = contentRef.current
+    if (!group) return null
+    const box = new THREE.Box3().setFromObject(group)
+    return box.isEmpty() ? null : box
+  }, [contentRef])
+
+  const applyPreset = useCallback((presetName: string) => {
+    const preset = CAMERA_PRESETS.find((item) => item.name === presetName) ?? CAMERA_PRESETS[0]
+    const bounds = getBounds()
+    const center = bounds?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3(0, 0, 0)
+    const distance = bounds ? computeFitDistance(bounds, perspectiveCamera) : 26
+    const direction = new THREE.Vector3(preset.position.x, preset.position.y, preset.position.z).normalize()
+
+    perspectiveCamera.position.copy(center.clone().add(direction.multiplyScalar(distance)))
+    perspectiveCamera.up.set(preset.up.x, preset.up.y, preset.up.z)
+    perspectiveCamera.lookAt(center)
+    controlsRef.current?.target.copy(center)
+    controlsRef.current?.update?.()
+  }, [controlsRef, getBounds, perspectiveCamera])
+
+  const zoomByFactor = useCallback((factor: number) => {
+    const controls = controlsRef.current
+    if (!controls) return
+    const target = controls.target.clone()
+    const direction = perspectiveCamera.position.clone().sub(target)
+    const nextDistance = THREE.MathUtils.clamp(direction.length() * factor, 8, 160)
+    direction.setLength(nextDistance)
+    perspectiveCamera.position.copy(target.clone().add(direction))
+    controls.update?.()
+  }, [controlsRef, perspectiveCamera])
+
+  useEffect(() => {
+    const resolvedPreset = viewMode === '3d'
+      ? cameraPreset
+      : VIEW_MODE_PRESET_MAP[viewMode]
+    applyPreset(resolvedPreset)
+  }, [applyPreset, cameraPreset, viewMode])
+
+  useEffect(() => {
+    if (zoomFitNonce > 0) {
+      const resolvedPreset = viewMode === '3d'
+        ? cameraPreset
+        : VIEW_MODE_PRESET_MAP[viewMode]
+      applyPreset(resolvedPreset)
+    }
+  }, [applyPreset, cameraPreset, viewMode, zoomFitNonce])
+
+  useEffect(() => {
+    if (zoomInNonce > 0) {
+      zoomByFactor(0.82)
+    }
+  }, [zoomByFactor, zoomInNonce])
+
+  useEffect(() => {
+    if (zoomOutNonce > 0) {
+      zoomByFactor(1.22)
+    }
+  }, [zoomByFactor, zoomOutNonce])
+
+  return null
+}
+
 // ---------------------------
 // Measurement overlay
 // ---------------------------
@@ -128,12 +264,21 @@ function MeasurementOverlay() {
 function SceneContent({
   structures,
   fragments: fragmentsProp,
+  controlsRef,
+  zoomFitNonce,
+  zoomInNonce,
+  zoomOutNonce,
 }: {
   structures: SegmentedStructure[]
   fragments?: FragmentTransform[]
+  controlsRef: RefObject<any>
+  zoomFitNonce: number
+  zoomInNonce: number
+  zoomOutNonce: number
 }) {
   const { viewerState, setSelectedFragment } = useViewerStore()
-  const { selectFragment, currentPlan, selectedFragmentId: planSelectedId } = usePlanningStore()
+  const { selectFragment, currentPlan } = usePlanningStore()
+  const contentRef = useRef<THREE.Group>(null)
 
   // Use prop fragments if provided, otherwise read reactively from planningStore
   const fragments = fragmentsProp ?? currentPlan?.fragmentTransforms
@@ -171,6 +316,16 @@ function SceneContent({
 
   return (
     <>
+      <SceneCameraController
+        contentRef={contentRef}
+        controlsRef={controlsRef}
+        viewMode={viewerState.viewMode}
+        cameraPreset={viewerState.cameraPreset}
+        zoomFitNonce={zoomFitNonce}
+        zoomInNonce={zoomInNonce}
+        zoomOutNonce={zoomOutNonce}
+      />
+
       {/* Lighting for bone visualization */}
       <ambientLight intensity={0.4} />
       <directionalLight position={[10, 20, 10]} intensity={0.8} castShadow />
@@ -191,55 +346,58 @@ function SceneContent({
         />
       )}
 
-      {/* Anatomical structures */}
-      {structures.map(structure => {
-        const vis = viewerState.structureVisibility[structure.label]
-        if (!vis) return null
-        return (
-          <AnatomyMesh
-            key={structure.label}
-            label={structure.label}
-            color={vis.color || structure.color}
-            opacity={vis.opacity}
-            wireframe={vis.wireframe}
-            selected={vis.selected}
-            visible={vis.visible}
-            position={positionMap[structure.label] ?? [0, 0, 0]}
-            shapeVariant={shapeMap[structure.label] ?? 'bone'}
-            meshUri={structure.meshUri || undefined}
-            onClick={() => handleSelectFragment(structure.label)}
-          />
-        )
-      })}
+      <group ref={contentRef}>
+        {/* Anatomical structures */}
+        {structures.map(structure => {
+          const vis = viewerState.structureVisibility[structure.label]
+          if (!vis) return null
+          return (
+            <AnatomyMesh
+              key={structure.label}
+              label={structure.label}
+              color={vis.color || structure.color}
+              opacity={vis.opacity}
+              wireframe={vis.wireframe}
+              selected={viewerState.selectedFragmentId === structure.label}
+              visible={vis.visible}
+              position={positionMap[structure.label] ?? [0, 0, 0]}
+              shapeVariant={shapeMap[structure.label] ?? 'bone'}
+              meshUri={structure.meshUri || undefined}
+              onClick={() => handleSelectFragment(structure.label)}
+            />
+          )
+        })}
 
-      {/* Fragment transforms (from planning) */}
-      {fragments?.map(frag => {
-        const vis = viewerState.structureVisibility[frag.structureLabel]
-        const t = frag.currentTransform
-        const basePos = positionMap[frag.structureLabel] ?? [0, 0, 0]
-        return (
-          <AnatomyMesh
-            key={frag.fragmentId}
-            label={frag.structureLabel}
-            color={vis?.color ?? '#ef4444'}
-            opacity={vis?.opacity ?? 0.85}
-            wireframe={vis?.wireframe ?? false}
-            selected={viewerState.selectedFragmentId === frag.fragmentId}
-            visible={vis?.visible ?? true}
-            position={[
-              basePos[0] + t.translation.x,
-              basePos[1] + t.translation.y,
-              basePos[2] + t.translation.z,
-            ]}
-            rotation={[t.rotation.x, t.rotation.y, t.rotation.z]}
-            shapeVariant="fragment"
-            onClick={() => handleSelectFragment(frag.fragmentId)}
-          />
-        )
-      })}
+        {/* Fragment transforms (from planning) */}
+        {fragments?.map(frag => {
+          const vis = viewerState.structureVisibility[frag.structureLabel]
+          const t = frag.currentTransform
+          const basePos = positionMap[frag.structureLabel] ?? [0, 0, 0]
+          return (
+            <AnatomyMesh
+              key={frag.fragmentId}
+              label={frag.structureLabel}
+              color={vis?.color ?? '#ef4444'}
+              opacity={vis?.opacity ?? 0.85}
+              wireframe={vis?.wireframe ?? false}
+              selected={viewerState.selectedFragmentId === frag.fragmentId}
+              visible={vis?.visible ?? true}
+              position={[
+                basePos[0] + t.translation.x,
+                basePos[1] + t.translation.y,
+                basePos[2] + t.translation.z,
+              ]}
+              rotation={[t.rotation.x, t.rotation.y, t.rotation.z]}
+              shapeVariant="fragment"
+              onClick={() => handleSelectFragment(frag.fragmentId)}
+            />
+          )
+        })}
+      </group>
 
       {/* Camera orbit controls */}
       <OrbitControls
+        ref={controlsRef}
         enablePan
         enableZoom
         enableRotate
@@ -277,8 +435,12 @@ export default function Viewer3D({
   height = '100%',
   className = '',
 }: Viewer3DProps) {
-  const { viewerState } = useViewerStore()
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const { viewerState, setSelectedFragment } = useViewerStore()
+  const { selectFragment } = usePlanningStore()
+  const controlsRef = useRef<any>(null)
+  const [zoomFitNonce, setZoomFitNonce] = useState(0)
+  const [zoomInNonce, setZoomInNonce] = useState(0)
+  const [zoomOutNonce, setZoomOutNonce] = useState(0)
 
   const handleScreenshot = () => {
     const canvas = document.querySelector('canvas.three-canvas') as HTMLCanvasElement
@@ -289,15 +451,28 @@ export default function Viewer3D({
     link.click()
   }
 
+  const selectedItemLabel = useMemo(() => {
+    if (!viewerState.selectedFragmentId) return null
+    const structure = structures.find((item) => item.label === viewerState.selectedFragmentId)
+    if (structure) return structure.displayName
+    const fragment = fragments?.find((item) => item.fragmentId === viewerState.selectedFragmentId)
+    return fragment?.displayName ?? viewerState.selectedFragmentId
+  }, [fragments, structures, viewerState.selectedFragmentId])
+
   return (
-    <div className={`flex flex-col bg-slate-900 ${className}`} style={{ height }} data-testid="viewer-3d">
+    <div className={`flex flex-col bg-[rgba(4,9,17,0.94)] ${className}`} style={{ height }} data-testid="viewer-3d">
       {/* Toolbar */}
-      <ViewerToolbar onScreenshot={handleScreenshot} />
+      <ViewerToolbar
+        onScreenshot={handleScreenshot}
+        onZoomFit={() => setZoomFitNonce((count) => count + 1)}
+        onZoomIn={() => setZoomInNonce((count) => count + 1)}
+        onZoomOut={() => setZoomOutNonce((count) => count + 1)}
+      />
 
       {/* Main viewer area */}
       <div className="flex flex-1 min-h-0">
         {/* Canvas */}
-        <div className="relative flex-1 bg-slate-950">
+        <div className="relative flex-1 bg-[radial-gradient(circle_at_top,rgba(8,145,178,0.08),transparent_26%),linear-gradient(180deg,#020617_0%,#000814_100%)]">
           <Canvas
             className="three-canvas"
             camera={{ position: [0, 5, 25], fov: 45, near: 0.1, far: 1000 }}
@@ -311,9 +486,20 @@ export default function Viewer3D({
             onCreated={({ gl }) => {
               gl.setClearColor(new THREE.Color('#020617'))
             }}
+            onPointerMissed={() => {
+              setSelectedFragment(null)
+              selectFragment(null)
+            }}
           >
             <Suspense fallback={null}>
-              <SceneContent structures={structures} fragments={fragments} />
+              <SceneContent
+                structures={structures}
+                fragments={fragments}
+                controlsRef={controlsRef}
+                zoomFitNonce={zoomFitNonce}
+                zoomInNonce={zoomInNonce}
+                zoomOutNonce={zoomOutNonce}
+              />
             </Suspense>
           </Canvas>
 
@@ -321,10 +507,20 @@ export default function Viewer3D({
           <CameraPresetButtons />
           <MeasurementOverlay />
 
+          <div className="absolute bottom-4 right-4 z-10 w-64 rounded-2xl border border-white/10 bg-[rgba(8,14,26,0.78)] px-4 py-3 backdrop-blur-xl">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-600">Clinician View</p>
+            <p className="mt-1 text-sm font-medium text-slate-100">
+              {selectedItemLabel ?? 'No structure selected'}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              Use the structure panel to isolate anatomy, adjust opacity, or switch to wireframe while reviewing fracture alignment.
+            </p>
+          </div>
+
           {/* View mode label */}
           {viewerState.viewMode !== '3d' && (
-            <div className="absolute top-2 left-2 bg-slate-900/90 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-cyan-400">
-              {viewerState.viewMode.toUpperCase()} VIEW
+            <div className="absolute top-2 left-2 rounded-xl border border-cyan-400/20 bg-[rgba(8,14,26,0.88)] px-3 py-1.5 text-xs font-mono text-cyan-300">
+              {viewerState.viewMode.toUpperCase()} ORIENTATION
             </div>
           )}
 

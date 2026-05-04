@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, FileText, ChevronRight, Check, AlertCircle, X, Plus, AlertTriangle } from 'lucide-react'
+import { Upload, FileText, ChevronRight, Check, AlertCircle, X, Plus, AlertTriangle, ShieldCheck, FlaskConical } from 'lucide-react'
 import { studiesApi, casesApi, caseStudiesApi, segmentationApi } from '../lib/api'
 import { Spinner } from '../components/common/LoadingOverlay'
+import PageHeader from '../components/common/PageHeader'
 import { useToastStore } from '../stores/toastStore'
 
 type Step = 1 | 2 | 3 | 4
@@ -202,46 +203,78 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto animate-fade-in" data-testid="upload-page">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-slate-100">Upload DICOM Study</h1>
-        <p className="text-sm text-slate-400 mt-0.5">Import CT or CBCT series to create a new surgical planning case</p>
-      </div>
+    <div className="p-6 max-w-5xl mx-auto animate-fade-in" data-testid="upload-page">
+      <PageHeader
+        eyebrow="Study Intake"
+        title="Upload DICOM Study"
+        description="Import CT or CBCT data, review the de-identified metadata, and launch the baseline workflow into segmentation and fracture planning."
+        chips={[
+          { label: files.length > 0 ? `${files.length} files selected` : 'No files selected', tone: files.length > 0 ? 'info' : 'neutral', icon: <Upload size={12} /> },
+          { label: patientMrn.trim() ? 'MRN captured for hashing' : 'Patient MRN required', tone: patientMrn.trim() ? 'success' : 'warning', icon: patientMrn.trim() ? <ShieldCheck size={12} /> : <AlertTriangle size={12} /> },
+          { label: 'Baseline-first workflow', tone: 'info', icon: <FlaskConical size={12} /> },
+        ]}
+      />
 
-      {/* Step indicator */}
-      <div className="flex items-center gap-0 mb-8" data-testid="step-indicator">
-        {STEPS.map((s, i) => (
-          <div key={s.n} className="flex items-center">
-            <div className="flex items-center gap-2">
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                step > s.n ? 'bg-emerald-600 text-white' : step === s.n ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 text-slate-400'
-              }`}>
-                {step > s.n ? <Check size={14} /> : s.n}
+      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_0.9fr]">
+        <div className="surface-card p-4">
+          <div className="flex items-center gap-0" data-testid="step-indicator">
+            {STEPS.map((s, i) => (
+              <div key={s.n} className="flex items-center">
+                <div className="flex items-center gap-2">
+                  <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                    step > s.n ? 'bg-emerald-600 text-white' : step === s.n ? 'bg-cyan-400 text-slate-950' : 'bg-slate-700 text-slate-400'
+                  }`}>
+                    {step > s.n ? <Check size={14} /> : s.n}
+                  </div>
+                  <span className={`text-sm font-medium ${step === s.n ? 'text-slate-100' : step > s.n ? 'text-emerald-400' : 'text-slate-500'}`}>
+                    {s.label}
+                  </span>
+                </div>
+                {i < STEPS.length - 1 && (
+                  <div className={`mx-4 h-px w-16 flex-1 ${step > s.n ? 'bg-emerald-600' : 'bg-slate-700'}`} />
+                )}
               </div>
-              <span className={`text-sm font-medium ${step === s.n ? 'text-slate-100' : step > s.n ? 'text-emerald-400' : 'text-slate-500'}`}>
-                {s.label}
-              </span>
-            </div>
-            {i < STEPS.length - 1 && (
-              <div className={`flex-1 h-px mx-4 w-16 ${step > s.n ? 'bg-emerald-600' : 'bg-slate-700'}`} />
-            )}
+            ))}
           </div>
-        ))}
+        </div>
+
+        <div className="surface-card p-4">
+          <p className="section-kicker">What This Flow Guarantees</p>
+          <div className="mt-3 space-y-3 text-sm text-slate-400">
+            <div className="surface-card-muted px-4 py-3">
+              <p className="font-medium text-slate-200">Truthful automation state</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                The UI treats upload, segmentation, and planning as separate verifiable steps instead of pretending every model path is always ready.
+              </p>
+            </div>
+            <div className="surface-card-muted px-4 py-3">
+              <p className="font-medium text-slate-200">De-identified intake review</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Metadata review surfaces what remains after PHI stripping before a case is created.
+              </p>
+            </div>
+            <div className="surface-card-muted px-4 py-3">
+              <p className="font-medium text-slate-200">Baseline workflow first</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Cases can proceed even when learned beta paths degrade, because the core deterministic route remains visible.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Step 1: Upload */}
       {step === 1 && (
-        <div className="space-y-4 animate-fade-in" data-testid="step-1">
+        <div className="mt-6 space-y-4 animate-fade-in" data-testid="step-1">
           {/* Drop zone */}
           <div
             onDrop={handleDrop}
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
             onDragLeave={() => setIsDragging(false)}
-            className={`border-2 border-dashed rounded-xl p-12 text-center transition-all ${
+            className={`rounded-[30px] border-2 border-dashed p-12 text-center transition-all ${
               isDragging
-                ? 'border-cyan-500 bg-cyan-950/30'
-                : 'border-slate-600 hover:border-slate-500 bg-slate-800/50'
+                ? 'border-cyan-400 bg-cyan-500/10'
+                : 'border-slate-600 bg-[rgba(19,32,51,0.68)] hover:border-slate-500'
             }`}
             data-testid="drop-zone"
           >
@@ -275,7 +308,7 @@ export default function UploadPage() {
 
           {/* File list */}
           {files.length > 0 && (
-            <div className="bg-slate-800 border border-slate-700 rounded-lg" data-testid="file-list">
+            <div className="surface-card overflow-hidden" data-testid="file-list">
               <div className="panel-header">
                 <h3 className="panel-title">Selected Files ({files.length})</h3>
                 <span className="text-xs font-mono text-slate-400">{totalSizeMb.toFixed(1)} MB</span>
@@ -303,7 +336,7 @@ export default function UploadPage() {
             </div>
           )}
 
-          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3" data-testid="patient-upload-metadata">
+          <div className="surface-card p-4 space-y-3" data-testid="patient-upload-metadata">
             <div>
               <label className="label-sm block mb-1.5">Patient MRN *</label>
               <input
@@ -322,7 +355,7 @@ export default function UploadPage() {
 
           {/* Upload progress */}
           {isUploading && (
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4" data-testid="upload-progress">
+            <div className="surface-card p-4" data-testid="upload-progress">
               <div className="flex items-center gap-3 mb-2">
                 <Spinner size={16} />
                 <span className="flex-1 text-sm text-slate-300">
@@ -387,8 +420,8 @@ export default function UploadPage() {
 
       {/* Step 2: Metadata Review */}
       {step === 2 && (
-        <div className="space-y-4 animate-fade-in" data-testid="step-2">
-          <div className="bg-slate-800 border border-slate-700 rounded-lg">
+        <div className="mt-6 space-y-4 animate-fade-in" data-testid="step-2">
+          <div className="surface-card overflow-hidden">
             <div className="panel-header">
               <h3 className="panel-title">Study Metadata</h3>
               <div className="flex items-center gap-3">
@@ -455,8 +488,8 @@ export default function UploadPage() {
 
       {/* Step 3: Case Creation Form */}
       {step === 3 && (
-        <div className="space-y-4 animate-fade-in" data-testid="step-3">
-          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-5">
+        <div className="mt-6 space-y-4 animate-fade-in" data-testid="step-3">
+          <div className="surface-card p-6 space-y-5">
             <h3 className="text-sm font-semibold text-slate-200">Case Configuration</h3>
 
             <div className="grid grid-cols-2 gap-4">
@@ -566,7 +599,7 @@ export default function UploadPage() {
 
       {/* Step 4: Confirmation */}
       {step === 4 && (
-        <div className="animate-fade-in" data-testid="step-4">
+        <div className="mt-6 animate-fade-in" data-testid="step-4">
           <div className="text-center py-12 space-y-6">
             <div className="w-20 h-20 rounded-full bg-emerald-950 border-2 border-emerald-600 flex items-center justify-center mx-auto">
               <Check size={36} className="text-emerald-400" />
@@ -580,7 +613,7 @@ export default function UploadPage() {
               </p>
             </div>
 
-            <div className="max-w-sm mx-auto bg-slate-800 border border-slate-700 rounded-lg p-4 text-left space-y-2">
+            <div className="surface-card max-w-sm mx-auto p-4 text-left space-y-2">
               {[
                 { label: 'Case Number', value: createdCaseNumber ?? 'Pending...' },
                 { label: 'Status', value: segmentationQueued ? 'Segmentation Queued' : 'Case Created' },

@@ -11,7 +11,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronLeft, ChevronRight, Maximize2, Layers, Sliders } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Layers, Sliders } from 'lucide-react'
 import type { SegmentedStructure } from '../../types/medical'
 import type { SlicePlane } from '../../lib/geometry'
 
@@ -312,8 +312,6 @@ function drawSyntheticSlice(
       const ny = py / H
       const cx = nx - 0.5
       const cy = ny - 0.5
-      const r = Math.sqrt(cx * cx + cy * cy)
-
       // Simulate skull cross-section profile
       let hu: number
 

@@ -26,13 +26,43 @@ export default defineConfig({
   },
   build: {
     sourcemap: true,
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
-        manualChunks: {
-          three: ['three', '@react-three/fiber', '@react-three/drei'],
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          query: ['@tanstack/react-query'],
-          charts: ['recharts'],
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return undefined
+          }
+
+          if (id.includes('@react-three/drei')) {
+            return 'react-three-drei'
+          }
+
+          if (id.includes('@react-three/fiber')) {
+            return 'react-three-fiber'
+          }
+
+          if (id.includes('/three/')) {
+            return 'three-core'
+          }
+
+          if (id.includes('recharts')) {
+            return 'charts'
+          }
+
+          if (id.includes('@tanstack/react-query')) {
+            return 'query'
+          }
+
+          if (
+            id.includes('/react/') ||
+            id.includes('/react-dom/') ||
+            id.includes('react-router-dom')
+          ) {
+            return 'vendor'
+          }
+
+          return undefined
         },
       },
     },

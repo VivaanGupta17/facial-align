@@ -6,6 +6,7 @@ import { reviewApi } from '../../lib/api'
 import { PageLoading, ErrorState } from '../common/LoadingOverlay'
 import { MetricInline } from '../common/MetricCard'
 import { ConfidenceRing } from '../common/ConfidenceBar'
+import { ProvenanceCard } from '../common/TrustIndicators'
 import Viewer3D from '../viewer/Viewer3D'
 import type { ReviewChecklist as ReviewChecklistItem } from '../../types/medical'
 
@@ -287,6 +288,10 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
               />
             </div>
 
+            <div className="mt-4">
+              <ProvenanceCard provenance={plan.provenance} title="Plan Provenance" />
+            </div>
+
             {/* Before/after toggle */}
             <div className="mt-4 flex items-center gap-2">
               <button
@@ -358,8 +363,8 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
       </div>
 
       {/* Right: Approval actions */}
-      <div className="w-80 shrink-0 flex flex-col border-l border-slate-800 bg-slate-900" data-testid="approval-panel">
-        <div className="panel-header border-b border-slate-800">
+      <div className="w-80 shrink-0 flex flex-col border-l border-white/10 bg-[rgba(8,14,26,0.84)] backdrop-blur-xl" data-testid="approval-panel">
+        <div className="panel-header border-b border-white/10">
           <h3 className="panel-title">Surgical Approval</h3>
           {isDecided && (
             <span className={`text-2xs font-bold ${
@@ -444,7 +449,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
 
         {/* Action buttons */}
         {!isDecided && (
-          <div className="p-4 border-t border-slate-800 space-y-2">
+          <div className="p-4 border-t border-white/10 space-y-2">
             <button
               onClick={handleApprove}
               disabled={!allRequiredPassed || approveReview.isPending || !signature}

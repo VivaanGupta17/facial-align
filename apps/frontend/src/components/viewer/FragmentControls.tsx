@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { RotateCcw, Cpu, Check, X, Undo2, Redo2, Lock, Unlock, Move3d, Save, XCircle } from 'lucide-react'
+import { RotateCcw, Cpu, Check, Undo2, Redo2, Lock, Unlock, Move3d, Save, XCircle } from 'lucide-react'
 import { usePlanningStore } from '../../stores/planningStore'
 import { planningApi } from '../../lib/api'
 import { ConfidenceBadge } from '../common/ConfidenceBar'
@@ -112,6 +112,7 @@ export default function FragmentControls() {
     undo,
     redo,
     markSaved,
+    toggleFragmentLock,
   } = usePlanningStore()
 
   const [activeSection, setActiveSection] = useState<'translate' | 'rotate'>('translate')
@@ -119,6 +120,42 @@ export default function FragmentControls() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [lastSavedTransforms, setLastSavedTransforms] = useState<Record<string, FragmentTransform> | null>(null)
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!currentPlan) {
+      setLastSavedTransforms(null)
+      return
+    }
+
+    const saved: Record<string, FragmentTransform> = {}
+    currentPlan.fragmentTransforms.forEach((fragment: FragmentTransform) => {
+      saved[fragment.fragmentId] = { ...fragment }
+    })
+    setLastSavedTransforms(saved)
+  }, [currentPlan])
+
+  const currentPlanId = currentPlan?.id
+  const debouncedSave = useCallback((fragmentId: string, transform: Transform3D) => {
+    if (!currentPlanId) return
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+    }
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        await planningApi.updateFragmentTransform(currentPlanId, fragmentId, transform)
+      } catch {
+        // Auto-save failures are silent — user can still explicitly save
+      }
+    }, 500)
+  }, [currentPlanId])
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
+    }
+  }, [])
 
   if (!currentPlan || !selectedFragmentId) {
     return (
@@ -133,31 +170,8 @@ export default function FragmentControls() {
   const fragment = currentPlan.fragmentTransforms.find((f: FragmentTransform) => f.fragmentId === selectedFragmentId)
   if (!fragment) return null
 
-  // Store last saved state on first render
-  if (!lastSavedTransforms) {
-    const saved: Record<string, FragmentTransform> = {}
-    currentPlan.fragmentTransforms.forEach((f: FragmentTransform) => {
-      saved[f.fragmentId] = { ...f }
-    })
-    setLastSavedTransforms(saved)
-  }
-
   const t = fragment.currentTransform
   const hasSuggestion = !!fragment.suggestedTransform
-
-  // Debounced auto-save to backend
-  const debouncedSave = useCallback((fragmentId: string, transform: Transform3D) => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current)
-    }
-    debounceTimerRef.current = setTimeout(async () => {
-      try {
-        await planningApi.updateFragmentTransform(currentPlan.id, fragmentId, transform)
-      } catch {
-        // Auto-save failures are silent — user can still explicitly save
-      }
-    }, 500)
-  }, [currentPlan.id])
 
   const updateTranslation = (axis: 'x' | 'y' | 'z', val: number) => {
     if (!fragment || fragment.isLocked) return
@@ -215,6 +229,7 @@ export default function FragmentControls() {
     if (!lastSavedTransforms || !lastSavedTransforms[selectedFragmentId]) return
     const savedFragment = lastSavedTransforms[selectedFragmentId]
     updateFragmentTransform(selectedFragmentId, savedFragment.currentTransform, 'reset')
+    markSaved()
   }
 
   return (
@@ -230,11 +245,11 @@ export default function FragmentControls() {
             )}
           </div>
           {fragment.isLocked ? (
-            <button className="btn-icon" title="Unlock fragment" data-testid="unlock-fragment">
+            <button onClick={() => toggleFragmentLock(fragment.fragmentId)} className="btn-icon" title="Unlock fragment" data-testid="unlock-fragment">
               <Lock size={13} />
             </button>
           ) : (
-            <button className="btn-icon" title="Lock fragment" data-testid="lock-fragment">
+            <button onClick={() => toggleFragmentLock(fragment.fragmentId)} className="btn-icon" title="Lock fragment" data-testid="lock-fragment">
               <Unlock size={13} />
             </button>
           )}

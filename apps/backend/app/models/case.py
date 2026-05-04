@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, Set
 
-from sqlalchemy import ForeignKey, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -77,7 +77,10 @@ class SurgicalCase(Base):
     )
     clinical_notes_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     planned_procedure: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    target_surgery_date: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    target_surgery_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     current_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     surgeon_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -85,12 +88,19 @@ class SurgicalCase(Base):
     team_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
-    approved_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     # Relationships
     patient = relationship("Patient", back_populates="surgical_cases")

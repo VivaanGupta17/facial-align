@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
   FolderOpen,
@@ -23,15 +23,15 @@ interface NavItem {
 
 const navSections: Array<{ title: string; items: NavItem[] }> = [
   {
-    title: 'Main',
+    title: 'Workflow',
     items: [
       { label: 'Dashboard', to: '/dashboard', icon: <LayoutDashboard size={16} /> },
-      { label: 'Cases', to: '/cases', icon: <FolderOpen size={16} />, badge: 4 },
+      { label: 'Cases', to: '/cases', icon: <FolderOpen size={16} /> },
       { label: 'Upload DICOM', to: '/upload', icon: <Upload size={16} /> },
     ],
   },
   {
-    title: 'Tools',
+    title: 'Planning',
     items: [
       { label: 'Studies', to: '/studies', icon: <Scan size={16} /> },
       { label: '3D Models', to: '/models', icon: <BoxSelect size={16} /> },
@@ -49,7 +49,6 @@ const navSections: Array<{ title: string; items: NavItem[] }> = [
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(() => window.innerWidth < 1024)
   const { activeCase } = useCaseStore()
-  const location = useLocation()
 
   // Auto-collapse on narrow viewports
   useEffect(() => {
@@ -61,11 +60,11 @@ export default function Sidebar() {
 
   return (
     <aside
-      className={`flex flex-col bg-slate-900 border-r border-slate-800 transition-all duration-300 ${collapsed ? 'w-14' : 'w-[240px]'} shrink-0`}
+      className={`flex shrink-0 flex-col border-r border-white/10 bg-[rgba(8,14,26,0.86)] backdrop-blur-xl transition-all duration-300 ${collapsed ? 'w-16' : 'w-[260px]'}`}
       data-testid="sidebar"
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 h-[52px] border-b border-slate-800">
+      <div className="flex h-[72px] items-center gap-3 border-b border-white/10 px-4">
         {/* SVG Logo — stylized facial bone outline */}
         <svg viewBox="0 0 28 28" fill="none" className="shrink-0 w-7 h-7" aria-label="Facial Align">
           <rect width="28" height="28" rx="6" fill="#0f172a" />
@@ -80,18 +79,18 @@ export default function Sidebar() {
         </svg>
         {!collapsed && (
           <div className="min-w-0">
-            <span className="font-semibold text-sm text-slate-100 tracking-tight">Facial Align</span>
-            <p className="text-2xs text-slate-500 font-mono">v0.9.0-beta</p>
+            <span className="text-sm font-semibold tracking-tight text-slate-100">Facial Align</span>
+            <p className="text-[11px] text-slate-500">Fracture planning console</p>
           </div>
         )}
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4" data-testid="sidebar-nav">
+      <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4" data-testid="sidebar-nav">
         {navSections.map(section => (
           <div key={section.title}>
             {!collapsed && (
-              <p className="px-3 mb-1.5 text-2xs font-semibold uppercase tracking-wider text-slate-600">
+              <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-600">
                 {section.title}
               </p>
             )}
@@ -102,8 +101,8 @@ export default function Sidebar() {
                     to={item.to}
                     className={({ isActive }) =>
                       isActive
-                        ? `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium text-cyan-400 bg-cyan-950 border border-cyan-900/60 ${collapsed ? 'justify-center' : ''}`
-                        : `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors ${collapsed ? 'justify-center' : ''}`
+                        ? `flex items-center gap-2.5 rounded-xl border border-cyan-400/20 bg-[rgba(12,74,110,0.26)] px-3 py-2.5 text-sm font-medium text-cyan-300 shadow-[0_10px_30px_rgba(8,145,178,0.12)] ${collapsed ? 'justify-center' : ''}`
+                        : `flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-100 ${collapsed ? 'justify-center' : ''}`
                     }
                     data-testid={`nav-${item.label.toLowerCase().replace(' ', '-')}`}
                     title={collapsed ? item.label : undefined}
@@ -129,21 +128,31 @@ export default function Sidebar() {
 
       {/* Active case indicator */}
       {activeCase && !collapsed && (
-        <div className="mx-2 mb-2 p-3 rounded-md bg-slate-800 border border-slate-700" data-testid="active-case-indicator">
+        <div className="mx-2 mb-2 rounded-2xl border border-cyan-400/15 bg-[rgba(10,18,30,0.85)] p-3" data-testid="active-case-indicator">
           <div className="flex items-center gap-2 mb-1">
             <Activity size={12} className="text-cyan-400 animate-pulse" />
-            <span className="text-2xs font-semibold uppercase tracking-wider text-cyan-500">Active Case</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-400">Active Case</span>
           </div>
           <p className="text-sm font-mono font-semibold text-slate-100">{activeCase.caseNumber}</p>
           <p className="text-xs text-slate-400 capitalize mt-0.5">{activeCase.caseType.replace(/_/g, ' ')}</p>
         </div>
       )}
 
+      {!collapsed && (
+        <div className="mx-2 mb-2 rounded-2xl border border-white/10 bg-[rgba(11,19,33,0.72)] px-3 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-600">Mode</p>
+          <p className="mt-1 text-sm font-medium text-slate-200">Baseline-first workflow</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Upload, review, plan, and approve with explicit provenance on each step.
+          </p>
+        </div>
+      )}
+
       {/* Collapse toggle */}
-      <div className="border-t border-slate-800 p-2">
+      <div className="border-t border-white/10 p-2">
         <button
           onClick={() => setCollapsed(c => !c)}
-          className="w-full flex items-center justify-center gap-2 py-2 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors text-sm"
+          className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-sm text-slate-500 transition-colors hover:bg-white/5 hover:text-slate-300"
           data-testid="sidebar-collapse-toggle"
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >

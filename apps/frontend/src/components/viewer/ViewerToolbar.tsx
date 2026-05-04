@@ -1,6 +1,5 @@
 import {
-  Box, Layers, Ruler, MessageSquare, Camera, ZoomIn, PanelRight,
-  Grid3X3, Crosshair, RotateCcw, Download,
+  Box, Camera, ZoomIn, ZoomOut, Grid3X3, Download,
 } from 'lucide-react'
 import { useViewerStore } from '../../stores/viewerStore'
 import type { ViewerState } from '../../types/medical'
@@ -40,27 +39,35 @@ const VIEW_MODES: Array<{ id: ViewerState['viewMode']; label: string }> = [
 interface ViewerToolbarProps {
   onScreenshot?: () => void
   onZoomFit?: () => void
+  onZoomIn?: () => void
+  onZoomOut?: () => void
   onExport?: () => void
 }
 
-export default function ViewerToolbar({ onScreenshot, onZoomFit, onExport }: ViewerToolbarProps) {
-  const { viewerState, setViewMode, setActiveTool, toggleStructuresPanel, toggleGrid } = useViewerStore()
-  const { viewMode, activeTool, showStructuresPanel, showGrid } = viewerState
+export default function ViewerToolbar({
+  onScreenshot,
+  onZoomFit,
+  onZoomIn,
+  onZoomOut,
+  onExport,
+}: ViewerToolbarProps) {
+  const { viewerState, setViewMode, toggleStructuresPanel, toggleGrid } = useViewerStore()
+  const { viewMode, showStructuresPanel, showGrid } = viewerState
 
   return (
     <div
-      className="flex items-center gap-1 px-3 py-2 bg-slate-900 border-b border-slate-800"
+      className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-[rgba(8,14,26,0.92)] px-3 py-2"
       data-testid="viewer-toolbar"
     >
       {/* View mode toggles */}
-      <div className="flex items-center bg-slate-800 rounded-md p-0.5 border border-slate-700" data-testid="view-mode-toggle">
+      <div className="flex items-center rounded-xl border border-white/10 bg-[rgba(15,23,42,0.76)] p-0.5" data-testid="view-mode-toggle">
         {VIEW_MODES.map(m => (
           <button
             key={m.id}
             onClick={() => setViewMode(m.id)}
-            className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
               viewMode === m.id
-                ? 'bg-cyan-900 text-cyan-400'
+                ? 'bg-cyan-400 text-slate-950'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
             data-testid={`view-mode-${m.id}`}
@@ -70,34 +77,7 @@ export default function ViewerToolbar({ onScreenshot, onZoomFit, onExport }: Vie
         ))}
       </div>
 
-      <div className="w-px h-5 bg-slate-700 mx-1" />
-
-      {/* Measurement tools */}
-      <div className="flex items-center gap-0.5">
-        <ToolButton
-          icon={<Ruler size={15} />}
-          label="Measure Distance"
-          active={activeTool === 'measure_distance'}
-          onClick={() => setActiveTool(activeTool === 'measure_distance' ? 'none' : 'measure_distance')}
-          testId="tool-measure-distance"
-        />
-        <ToolButton
-          icon={<Crosshair size={15} />}
-          label="Measure Angle"
-          active={activeTool === 'measure_angle'}
-          onClick={() => setActiveTool(activeTool === 'measure_angle' ? 'none' : 'measure_angle')}
-          testId="tool-measure-angle"
-        />
-        <ToolButton
-          icon={<MessageSquare size={15} />}
-          label="Annotate"
-          active={activeTool === 'annotate'}
-          onClick={() => setActiveTool(activeTool === 'annotate' ? 'none' : 'annotate')}
-          testId="tool-annotate"
-        />
-      </div>
-
-      <div className="w-px h-5 bg-slate-700 mx-1" />
+      <div className="mx-1 h-5 w-px bg-white/10" />
 
       {/* View options */}
       <div className="flex items-center gap-0.5">
@@ -117,23 +97,24 @@ export default function ViewerToolbar({ onScreenshot, onZoomFit, onExport }: Vie
         />
       </div>
 
-      <div className="w-px h-5 bg-slate-700 mx-1" />
+      <div className="mx-1 h-5 w-px bg-white/10" />
 
       {/* Actions */}
       <div className="flex items-center gap-0.5">
+        <ToolButton icon={<ZoomOut size={15} />} label="Zoom Out" onClick={() => onZoomOut?.()} testId="tool-zoom-out" />
+        <ToolButton icon={<ZoomIn size={15} />} label="Zoom In" onClick={() => onZoomIn?.()} testId="tool-zoom-in" />
         <ToolButton icon={<ZoomIn size={15} />} label="Zoom to Fit" onClick={() => onZoomFit?.()} testId="tool-zoom-fit" />
         <ToolButton icon={<Camera size={15} />} label="Screenshot" onClick={() => onScreenshot?.()} testId="tool-screenshot" />
         <ToolButton icon={<Download size={15} />} label="Export STL" onClick={() => onExport?.()} testId="tool-export-stl" />
       </div>
 
-      {/* Active tool indicator */}
-      {activeTool !== 'none' && (
-        <div className="ml-auto flex items-center gap-2 text-xs text-cyan-400 bg-cyan-950 border border-cyan-800 px-2 py-1 rounded">
-          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-          {activeTool.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} active
-          <button onClick={() => setActiveTool('none')} className="text-slate-400 hover:text-slate-100 ml-1">×</button>
-        </div>
-      )}
+      <div className="ml-auto hidden items-center gap-2 rounded-full border border-white/10 bg-[rgba(15,23,42,0.72)] px-3 py-1 text-[11px] text-slate-500 lg:flex">
+        <span>Rotate: drag</span>
+        <span className="h-1 w-1 rounded-full bg-slate-700" />
+        <span>Pan: right drag</span>
+        <span className="h-1 w-1 rounded-full bg-slate-700" />
+        <span>Zoom: scroll or +/-</span>
+      </div>
     </div>
   )
 }

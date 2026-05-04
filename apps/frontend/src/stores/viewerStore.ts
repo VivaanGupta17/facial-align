@@ -76,6 +76,8 @@ interface ViewerStoreState {
   removeMeasurement: (id: string) => void
   clearMeasurements: () => void
   resetVisibility: () => void
+  isolateStructure: (label: StructureLabel) => void
+  showAllStructures: () => void
 }
 
 export const useViewerStore = create<ViewerStoreState>()(
@@ -167,6 +169,38 @@ export const useViewerStore = create<ViewerStoreState>()(
 
       resetVisibility: () =>
         set(s => ({ viewerState: { ...s.viewerState, structureVisibility: defaultVisibility } })),
+
+      isolateStructure: (label) =>
+        set((s) => ({
+          viewerState: {
+            ...s.viewerState,
+            structureVisibility: Object.fromEntries(
+              Object.entries(s.viewerState.structureVisibility).map(([key, value]) => [
+                key,
+                {
+                  ...value,
+                  visible: key === label,
+                },
+              ])
+            ) as Record<StructureLabel, StructureVisibility>,
+          },
+        })),
+
+      showAllStructures: () =>
+        set((s) => ({
+          viewerState: {
+            ...s.viewerState,
+            structureVisibility: Object.fromEntries(
+              Object.entries(s.viewerState.structureVisibility).map(([key, value]) => [
+                key,
+                {
+                  ...value,
+                  visible: true,
+                },
+              ])
+            ) as Record<StructureLabel, StructureVisibility>,
+          },
+        })),
     }),
     { name: 'ViewerStore' }
   )

@@ -14,10 +14,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import bcrypt
 from fastapi import Depends, HTTPException, Request, Security, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.database import get_db_session
+from app.models.api_key import ApiKey
+from app.models.user import User
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -26,18 +32,25 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 # ─── Password hashing ─────────────────────────────────────────────────────────
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+BCRYPT_ROUNDS = 12
 
 
 def hash_password(plain_password: str) -> str:
     """Hash a plain-text password using bcrypt."""
-    return pwd_context.hash(plain_password)
+    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+    return bcrypt.hashpw(plain_password.encode("utf-8"), salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain-text password against a hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8"),
+        )
+    except (TypeError, ValueError):
+        logger.warning("password_hash_verification_failed", reason="invalid_hash_payload")
+        return False
 
 
 # ─── JWT Tokens ───────────────────────────────────────────────────────────────
@@ -195,6 +208,7 @@ async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     api_key: Optional[str] = Security(api_key_header),
+    db: AsyncSession = Depends(get_db_session),
 ) -> CurrentUser:
     """
     FastAPI dependency to extract and validate the current user.
@@ -213,13 +227,29 @@ async def get_current_user(
         return CurrentUser(user_id=user_id, role=role, jti=jti)
 
     if api_key:
-        # TODO: validate API key against database
         api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-        # Placeholder: in production, look up api_key_hash in DB
-        logger.info("api_key_auth_attempt", key_hash_prefix=api_key_hash[:8])
+        
+        db_key_user = (
+            await db.execute(
+                select(ApiKey, User)
+                .join(User, User.id == ApiKey.user_id)
+                .where(ApiKey.key_hash == api_key_hash, ApiKey.is_active == True)
+            )
+        ).first()
+        
+        if db_key_user:
+            api_key_obj, user = db_key_user
+            if not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Inactive user for this API key",
+                )
+            return CurrentUser(user_id=str(user.id), role=user.role, jti="")
+            
+        logger.info("api_key_auth_attempt", key_hash_prefix=api_key_hash[:8], result="failed")
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="API key authentication not yet configured",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
         )
 
     raise HTTPException(

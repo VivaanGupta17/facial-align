@@ -11,7 +11,6 @@
 import { useEffect, useCallback, useRef, type RefObject } from 'react'
 import { useViewerStore } from '../stores/viewerStore'
 import { usePlanningStore } from '../stores/planningStore'
-import type { ViewerState } from '../types/medical'
 
 // =============================================================================
 // Types
@@ -60,7 +59,6 @@ function shortcutId(s: Pick<KeyboardShortcut, 'key' | 'ctrl' | 'shift' | 'alt'>)
 // =============================================================================
 
 const registry = new Map<string, KeyboardShortcut>()
-let registryVersion = 0
 
 function registerShortcut(s: KeyboardShortcut): () => void {
   const id = shortcutId(s)
@@ -68,10 +66,8 @@ function registerShortcut(s: KeyboardShortcut): () => void {
     console.warn(`[useKeyboardShortcuts] Shortcut conflict: "${id}" is already registered. Overwriting.`)
   }
   registry.set(id, s)
-  registryVersion++
   return () => {
     registry.delete(id)
-    registryVersion++
   }
 }
 

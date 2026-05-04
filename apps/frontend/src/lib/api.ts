@@ -6,6 +6,7 @@
 import type {
   AngleClass,
   BoundingBox,
+  CapabilityInfo,
   CaseListItem,
   CaseStatus,
   CaseStudyInfo,
@@ -14,6 +15,7 @@ import type {
   FragmentTransform as UiFragmentTransform,
   OcclusalConstraints,
   PaginatedResponse,
+  ProvenanceInfo,
   ReductionPlan,
   ReviewChecklist,
   SegmentationResult,
@@ -75,10 +77,17 @@ async function fetchApi<T>(path: string, options: FetchOptions = {}): Promise<T>
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
 
-  if (response.status === 401) {
+  const isBootstrapAuthPath =
+    path.startsWith('/auth/login') ||
+    path.startsWith('/auth/register')
+
+  if (response.status === 401 && !isBootstrapAuthPath) {
     localStorage.removeItem('auth_token')
     localStorage.removeItem('refresh_token')
-    window.location.href = '/login'
+    if (window.location.pathname !== '/login') {
+      window.history.replaceState({}, '', '/login')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
     throw new Error('Session expired')
   }
 
@@ -183,6 +192,24 @@ function toStructureLabel(name: string): StructureLabel {
   return STRUCTURE_LABEL_MAP[normalized] ?? (normalized as StructureLabel)
 }
 
+function toViewerMeshUri(
+  segmentationId: string,
+  structureName: string,
+  format?: string | null,
+  path?: string | null,
+): string {
+  if (format === 'glb') {
+    return `${BASE_URL}/viewer/meshes/${segmentationId}/${encodeURIComponent(structureName)}.glb`
+  }
+
+  if (!path) return ''
+  if (path.startsWith('/api/') || path.startsWith('http://') || path.startsWith('https://')) {
+    return path
+  }
+
+  return ''
+}
+
 function vectorFromList(values?: number[] | null): Vector3 {
   if (!values || values.length < 3) return DEFAULT_VECTOR
   return {
@@ -212,6 +239,21 @@ function makeBoundingBox(bounds?: BackendBoundingBox | null): BoundingBox {
       y: (min.y + max.y) / 2,
       z: (min.z + max.z) / 2,
     },
+  }
+}
+
+function mapProvenanceInfo(
+  provenance?: BackendProvenanceInfo | null
+): ProvenanceInfo | null {
+  if (!provenance) return null
+
+  return {
+    algorithmUsed: provenance.algorithmUsed,
+    validationTier: provenance.validationTier,
+    betaStatus: provenance.betaStatus,
+    warnings: provenance.warnings ?? [],
+    fallbackReason: provenance.fallbackReason ?? null,
+    modelVersion: provenance.modelVersion ?? null,
   }
 }
 
@@ -514,7 +556,10 @@ function mapSegmentationResult(result: BackendSegmentationResult): SegmentationR
   const meshByName = new Map<string, string>()
   for (const mesh of result.meshes ?? []) {
     if (!meshByName.has(mesh.structureName)) {
-      meshByName.set(mesh.structureName, mesh.path)
+      meshByName.set(
+        mesh.structureName,
+        toViewerMeshUri(result.id, mesh.structureName, mesh.format, mesh.path)
+      )
     }
   }
 
@@ -564,6 +609,7 @@ function mapSegmentationResult(result: BackendSegmentationResult): SegmentationR
       passesClinicalThreshold: overallConfidence >= 0.75,
     },
     warnings,
+    provenance: mapProvenanceInfo(result.provenance),
     createdAt: result.createdAt,
     completedAt: result.completedAt ?? result.createdAt,
     gpuUsed: result.gpuDevice ?? 'Unavailable',
@@ -671,7 +717,6 @@ function mapPlanResponse(plan: BackendReductionPlanResponse): ReductionPlan {
   const overjetTarget = safeNumber(plan.occlusalConstraints?.targetOverjetMm, 2)
   const overbiteTargetMm = safeNumber(plan.occlusalConstraints?.targetOverbiteMm, 3)
   const midlineTolerance = safeNumber(plan.occlusalConstraints?.midlineToleranceMm, 1)
-  const cantTolerance = safeNumber(plan.occlusalConstraints?.cantToleranceDegrees, 2)
   const metrics = plan.occlusalMetrics
 
   return {
@@ -703,6 +748,7 @@ function mapPlanResponse(plan: BackendReductionPlanResponse): ReductionPlan {
     aiConfidence: safeNumber(plan.confidenceScore, 0.75),
     aiRecommendation: plan.provenance?.warnings?.[0] ?? 'Review the proposed reduction and confirm each fragment position.',
     isApproved: plan.surgeonApproved,
+    provenance: mapProvenanceInfo(plan.provenance),
     createdAt: plan.createdAt,
     updatedAt: plan.approvedAt ?? plan.createdAt,
     createdBy: plan.approvedBy ?? 'system',
@@ -990,7 +1036,15 @@ interface BackendReviewResponse {
 interface BackendCapabilityEntry {
   name: string
   category: string
+  status: 'available' | 'degraded' | 'unavailable'
+  baselineAvailable: boolean
+  learnedAvailable: boolean
+  artifactRequired: boolean
+  artifactReady: boolean
+  validationTier: string
+  betaStatus: string
   modelVersion?: string | null
+  warnings?: string[] | null
 }
 
 interface BackendCapabilitiesResponse {
@@ -1053,24 +1107,83 @@ export interface RegisterData {
   specialty?: string
 }
 
+interface BackendTokenResponse {
+  accessToken?: string
+  refreshToken?: string
+  tokenType?: string
+  expiresIn?: number
+  access_token?: string
+  refresh_token?: string
+  token_type?: string
+  expires_in?: number
+}
+
+interface BackendUserProfile {
+  id: string
+  email: string
+  role: string
+  institution?: string | null
+  specialty?: string | null
+  fullName?: string
+  full_name?: string
+  isActive?: boolean
+  is_active?: boolean
+  createdAt?: string
+  created_at?: string
+}
+
+function normalizeTokenResponse(response: BackendTokenResponse): TokenResponse {
+  return {
+    access_token: response.accessToken ?? response.access_token ?? '',
+    refresh_token: response.refreshToken ?? response.refresh_token ?? '',
+    token_type: response.tokenType ?? response.token_type ?? 'bearer',
+    expires_in: response.expiresIn ?? response.expires_in ?? 0,
+  }
+}
+
+function normalizeUserProfile(response: BackendUserProfile): UserProfile {
+  return {
+    id: response.id,
+    email: response.email,
+    full_name: response.fullName ?? response.full_name ?? '',
+    role: response.role,
+    institution: response.institution ?? null,
+    specialty: response.specialty ?? null,
+    is_active: response.isActive ?? response.is_active ?? true,
+    created_at: response.createdAt ?? response.created_at ?? '',
+  }
+}
+
 // ---------------------------
 // Auth API
 // ---------------------------
 
 export const authApi = {
-  login: (email: string, password: string) =>
-    fetchApi<TokenResponse>('/auth/login', { method: 'POST', body: { email, password } }),
+  login: async (email: string, password: string) =>
+    normalizeTokenResponse(
+      await fetchApi<BackendTokenResponse>('/auth/login', { method: 'POST', body: { email, password } })
+    ),
 
-  register: (data: RegisterData) =>
-    fetchApi<TokenResponse>('/auth/register', { method: 'POST', body: data }),
+  register: async (data: RegisterData) =>
+    normalizeTokenResponse(
+      await fetchApi<BackendTokenResponse>('/auth/register', { method: 'POST', body: data })
+    ),
 
-  me: () => fetchApi<UserProfile>('/auth/me'),
+  me: async () =>
+    normalizeUserProfile(await fetchApi<BackendUserProfile>('/auth/me')),
 
-  updateMe: (data: { full_name?: string; institution?: string; specialty?: string }) =>
-    fetchApi<UserProfile>('/auth/me', { method: 'PUT', body: data }),
+  updateMe: async (data: { full_name?: string; institution?: string; specialty?: string }) =>
+    normalizeUserProfile(
+      await fetchApi<BackendUserProfile>('/auth/me', { method: 'PUT', body: data })
+    ),
 
-  refresh: (refreshToken: string) =>
-    fetchApi<TokenResponse>('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } }),
+  refresh: async (refreshToken: string) =>
+    normalizeTokenResponse(
+      await fetchApi<BackendTokenResponse>('/auth/refresh', {
+        method: 'POST',
+        body: { refresh_token: refreshToken },
+      })
+    ),
 
   changePassword: (currentPassword: string, newPassword: string) =>
     fetchApi<void>('/auth/change-password', {
@@ -1212,6 +1325,20 @@ export const dashboardApi = {
       fetchApi<BackendCapabilitiesResponse>('/capabilities'),
     ])
 
+    const capabilityEntries: CapabilityInfo[] = capabilities.capabilities.map((capability) => ({
+      name: capability.name,
+      category: capability.category,
+      status: capability.status,
+      baselineAvailable: capability.baselineAvailable,
+      learnedAvailable: capability.learnedAvailable,
+      artifactRequired: capability.artifactRequired,
+      artifactReady: capability.artifactReady,
+      validationTier: capability.validationTier,
+      betaStatus: capability.betaStatus,
+      modelVersion: capability.modelVersion ?? null,
+      warnings: capability.warnings ?? [],
+    }))
+
     return {
       gpus: health.gpuDevices.map((name, index) => ({
         id: String(index),
@@ -1230,9 +1357,16 @@ export const dashboardApi = {
           : capability.category === 'planning'
           ? 'planning'
           : 'occlusion',
+        status: capability.status,
+        validationTier: capability.validationTier,
+        betaStatus: capability.betaStatus,
+        baselineAvailable: capability.baselineAvailable,
+        learnedAvailable: capability.learnedAvailable,
+        artifactReady: capability.artifactReady,
+        warnings: capability.warnings ?? [],
         lastUpdated: health.timestamp,
-        accuracy: 0,
       })),
+      capabilities: capabilityEntries,
       queue: {
         depth: 0,
         estimatedWaitMinutes: 0,

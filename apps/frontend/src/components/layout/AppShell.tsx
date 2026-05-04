@@ -5,15 +5,16 @@ import ToastContainer from '../common/Toast'
 
 export default function AppShell() {
   return (
-    <div className="flex h-screen bg-slate-900 overflow-hidden" data-testid="app-shell">
+    <div className="app-shell-background flex h-screen overflow-hidden" data-testid="app-shell">
       {/* Sidebar */}
       <Sidebar />
 
       {/* Main content area */}
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 bg-grid opacity-[0.025]" />
         <TopBar />
         <main
-          className="flex-1 overflow-auto"
+          className="relative z-10 flex-1 overflow-auto"
           data-testid="main-content"
         >
           <Outlet />

@@ -50,14 +50,12 @@ def upgrade() -> None:
     )
     op.create_index("ix_users_email", "users", ["email"])
 
-    # Seed default users — passwords hashed with bcrypt (passlib)
+    # Seed default users with precomputed bcrypt hashes so migration stays
+    # self-contained and does not depend on optional password libraries.
     # admin@facialign.local / admin
     # surgeon@facialign.local / surgeon
-    #
-    # Pre-computed bcrypt hashes so migration is self-contained and doesn't
-    # depend on passlib being importable in the Alembic env.
-    from passlib.context import CryptContext
-    _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    admin_pw = "$2b$12$Pxk/tFaCLpAmEEOfZVST..4110PlHmbtdrhkUKakwBThqWw1/EAyy"
+    surgeon_pw = "$2b$12$wvQFWUMIFt64AtdxMBD9w.iSluS4qdQSmK2uCYUYckW9FBlL0ZFSC"
 
     op.execute(
         sa.text(
@@ -68,8 +66,8 @@ def upgrade() -> None:
                 (gen_random_uuid(), 'surgeon@facialign.local', :surgeon_pw, 'Demo Surgeon', 'surgeon', true, true)
             """
         ).bindparams(
-            admin_pw=_pwd.hash("admin"),
-            surgeon_pw=_pwd.hash("surgeon"),
+            admin_pw=admin_pw,
+            surgeon_pw=surgeon_pw,
         )
     )
 
