@@ -23,8 +23,8 @@ pytestmark = [
 
 def _make_mock_case(
     case_id=None,
-    status="created",
-    case_type="trauma",
+    status="CREATED",
+    case_type="TRAUMA",
 ):
     """Create a mock SurgicalCase ORM object."""
     mock = MagicMock()
@@ -32,8 +32,8 @@ def _make_mock_case(
     mock.case_number = f"FA-2024-{str(mock.id)[:8].upper()}"
     mock.patient_id = uuid.uuid4()
     mock.study_id = uuid.uuid4()
-    mock.case_type = MagicMock(value=case_type)
-    mock.status = MagicMock(value=status)
+    mock.case_type = case_type
+    mock.status = status
     mock.surgeon_id = "test-surgeon-001"
     mock.reviewer_id = None
     mock.fracture_classification = "Le Fort II"
@@ -111,7 +111,7 @@ class TestCreateCase:
         payload = {
             "patient_id": str(uuid.uuid4()),
             "study_id": str(uuid.uuid4()),
-            "case_type": "trauma",
+            "case_type": "TRAUMA",
             "fracture_classification": "Le Fort II",
             "planned_procedure": "ORIF",
         }
@@ -209,13 +209,13 @@ class TestStatusTransition:
         from app.core.security import get_current_user, require_surgeon
 
         case_id = uuid.uuid4()
-        mock_case = _make_mock_case(case_id=case_id, status="created")
+        mock_case = _make_mock_case(case_id=case_id, status="CREATED")
         mock_case.transition_to = MagicMock()  # Allow any transition
         app.dependency_overrides[get_db_session] = _mock_db_override(mock_case=mock_case)
         app.dependency_overrides[get_current_user] = _mock_auth_override()
         app.dependency_overrides[require_surgeon] = _mock_auth_override()
 
-        payload = {"new_status": "segmenting"}
+        payload = {"new_status": "DICOM_PROCESSING"}
         resp = await async_client.post(f"/api/v1/cases/{case_id}/status", json=payload)
         assert resp.status_code == 200
 
@@ -227,15 +227,15 @@ class TestStatusTransition:
         from app.core.security import get_current_user, require_surgeon
 
         case_id = uuid.uuid4()
-        mock_case = _make_mock_case(case_id=case_id, status="created")
+        mock_case = _make_mock_case(case_id=case_id, status="CREATED")
         mock_case.transition_to = MagicMock(
-            side_effect=ValueError("Invalid transition from created to approved")
+            side_effect=ValueError("Invalid transition from CREATED to APPROVED")
         )
         app.dependency_overrides[get_db_session] = _mock_db_override(mock_case=mock_case)
         app.dependency_overrides[get_current_user] = _mock_auth_override()
         app.dependency_overrides[require_surgeon] = _mock_auth_override()
 
-        payload = {"new_status": "approved"}
+        payload = {"new_status": "APPROVED"}
         resp = await async_client.post(f"/api/v1/cases/{case_id}/status", json=payload)
         # Should return 400 or 409 for invalid transition
         assert resp.status_code in (400, 409, 422)

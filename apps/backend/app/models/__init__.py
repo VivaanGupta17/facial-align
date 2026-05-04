@@ -5,6 +5,7 @@ from app.models.case import CaseStatus, CaseType, SurgicalCase, VALID_TRANSITION
 from app.models.case_study import CaseStudy
 from app.models.patient import Patient
 from app.models.plan import ReductionPlan
+from app.models.review import PlanReview
 from app.models.segmentation import SegmentationResult
 from app.models.study import ImagingStudy
 from app.models.user import User
@@ -16,6 +17,7 @@ __all__ = [
     "CaseType",
     "ImagingStudy",
     "Patient",
+    "PlanReview",
     "ReductionPlan",
     "SegmentationResult",
     "SurgicalCase",

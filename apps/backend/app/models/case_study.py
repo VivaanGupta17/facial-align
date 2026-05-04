@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
@@ -39,7 +40,7 @@ class CaseStudy(Base):
     study_role: Mapped[str] = mapped_column(
         String(32), server_default=text("'pre_op'"), nullable=False
     )
-    study_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    study_label: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     is_primary: Mapped[bool] = mapped_column(
         server_default=text("FALSE"), nullable=False
     )

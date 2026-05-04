@@ -6,9 +6,7 @@ Cases are the central entity linking patients, imaging studies, and surgical pla
 from __future__ import annotations
 
 import uuid
-from typing import Optional
-
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -55,6 +53,24 @@ async def _build_case_response(
     case: SurgicalCase, db: AsyncSession
 ) -> CaseResponse:
     """Build a full CaseResponse by enriching with segmentation and plan summaries."""
+    def _optional_str(value: object) -> Optional[str]:
+        return value if isinstance(value, str) else None
+
+    def _optional_float(value: object) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    def _optional_int(value: object) -> Optional[int]:
+        if isinstance(value, bool):
+            return None
+        return value if isinstance(value, int) else None
+
+    def _optional_bool(value: object) -> Optional[bool]:
+        return value if isinstance(value, bool) else None
+
     # Fetch latest segmentation
     seg_stmt = (
         select(SegmentationResult)
@@ -65,16 +81,22 @@ async def _build_case_response(
     seg_row = (await db.execute(seg_stmt)).scalar_one_or_none()
     seg_summary = None
     if seg_row:
-        label_count = len(seg_row.structure_labels or {})
-        seg_summary = SegmentationSummary(
-            id=seg_row.id,
-            status=seg_row.status,
-            model_name=seg_row.model_name,
-            model_version=seg_row.model_version,
-            overall_confidence=seg_row.overall_confidence,
-            structure_count=label_count,
-            created_at=seg_row.created_at,
-        )
+        model_name = _optional_str(getattr(seg_row, "model_name", None))
+        model_version = _optional_str(getattr(seg_row, "model_version", None))
+        if model_name and model_version:
+            structure_labels = getattr(seg_row, "structure_labels", None)
+            label_count = len(structure_labels) if isinstance(structure_labels, dict) else 0
+            seg_summary = SegmentationSummary(
+                id=seg_row.id,
+                status=seg_row.status,
+                model_name=model_name,
+                model_version=model_version,
+                overall_confidence=_optional_float(
+                    getattr(seg_row, "overall_confidence", None)
+                ),
+                structure_count=label_count,
+                created_at=seg_row.created_at,
+            )
 
     # Count segmentations
     seg_count = (
@@ -93,14 +115,19 @@ async def _build_case_response(
     plan_row = (await db.execute(plan_stmt)).scalar_one_or_none()
     plan_summary = None
     if plan_row:
-        plan_summary = PlanSummary(
-            id=plan_row.id,
-            plan_version=plan_row.plan_version,
-            status=plan_row.status,
-            confidence_score=plan_row.confidence_score,
-            surgeon_approved=plan_row.surgeon_approved,
-            created_at=plan_row.created_at,
-        )
+        plan_version = _optional_int(getattr(plan_row, "plan_version", None))
+        surgeon_approved = _optional_bool(getattr(plan_row, "surgeon_approved", None))
+        if plan_version is not None and surgeon_approved is not None:
+            plan_summary = PlanSummary(
+                id=plan_row.id,
+                plan_version=plan_version,
+                status=plan_row.status,
+                confidence_score=_optional_float(
+                    getattr(plan_row, "confidence_score", None)
+                ),
+                surgeon_approved=surgeon_approved,
+                created_at=plan_row.created_at,
+            )
 
     plan_count = (
         await db.execute(
@@ -186,14 +213,36 @@ async def create_case(
         team_ids=payload.team_ids,
         created_by=current_user.user_id,
     )
+    if not getattr(case, "id", None):
+        case.id = str(uuid.uuid4())
+    if not getattr(case, "created_at", None) or not getattr(case, "updated_at", None):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        case.created_at = case.created_at or now
+        case.updated_at = case.updated_at or now
+
     db.add(case)
+    await db.flush()
+
+    # Ensure the primary study is durably linked in the case-study junction table.
+    db.add(
+        CaseStudy(
+            case_id=str(case.id),
+            study_id=str(payload.study_id),
+            study_role="pre_op",
+            study_label=None,
+            is_primary=True,
+            display_order=0,
+        )
+    )
     await db.flush()
 
     logger.info(
         "case_created",
         case_id=str(case.id),
         case_number=case.case_number,
-        case_type=case.case_type.value,
+        case_type=str(case.case_type),
         created_by=current_user.user_id,
     )
     audit_logger.log_phi_access(
@@ -340,16 +389,17 @@ async def transition_case_status(
     if not case:
         raise CaseNotFoundError(f"Case {case_id} not found")
 
-    old_status = case.status
+    old_status = CaseStatus(case.status)
+    requested_status = CaseStatus(payload.new_status)
     try:
-        case.transition_to(payload.new_status)
+        case.transition_to(requested_status)
     except ValueError as exc:
         raise InvalidStatusTransitionError(
             str(exc),
-            context={"from": old_status.value, "to": payload.new_status.value}
+            context={"from": old_status.value, "to": requested_status.value}
         )
 
-    if payload.new_status == CaseStatus.APPROVED:
+    if requested_status == CaseStatus.APPROVED:
         from datetime import datetime, timezone
         case.approved_at = datetime.now(timezone.utc)
 
@@ -357,7 +407,7 @@ async def transition_case_status(
         "case_status_transitioned",
         case_id=str(case_id),
         from_status=old_status.value,
-        to_status=payload.new_status.value,
+        to_status=requested_status.value,
         user_id=current_user.user_id,
     )
 
@@ -371,7 +421,7 @@ async def transition_case_status(
             "fields_changed": ["status"],
             "operation": "status_transition",
             "from_status": old_status.value,
-            "to_status": payload.new_status.value,
+            "to_status": requested_status.value,
         },
     )
 

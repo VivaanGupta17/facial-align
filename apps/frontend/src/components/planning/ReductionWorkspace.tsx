@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Cpu, Check, X, AlertTriangle, ChevronDown, Loader2, GitCompare } from 'lucide-react'
 import { usePlan, useGeneratePlan, usePlanVersions } from '../../hooks/usePlanning'
 import { useSegmentationResult } from '../../hooks/useSegmentation'
@@ -86,7 +86,13 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
   const { data: segResult } = useSegmentationResult(caseId)
   const { data: versions } = usePlanVersions(caseId)
   const generatePlan = useGeneratePlan(caseId)
-  const { setGenerating } = usePlanningStore()
+  const { setGenerating, setPlan } = usePlanningStore()
+
+  useEffect(() => {
+    if (plan) {
+      setPlan(plan)
+    }
+  }, [plan, setPlan])
 
   if (planLoading) return <PageLoading label="Loading planning workspace..." />
   if (!plan && !planId) {

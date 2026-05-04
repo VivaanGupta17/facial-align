@@ -89,7 +89,7 @@ def run_dicom_ingestion_pipeline(
     """
     from pathlib import Path
 
-    from app.pipelines.dicom_ingestion.pipeline import DicomIngestionPipeline
+    from pipelines.dicom_ingestion.pipeline import DicomIngestionPipeline
 
     task_logger.info(
         f"Starting DICOM ingestion | study_id={study_id} | upload_path={upload_path}"
@@ -137,8 +137,8 @@ def run_dicom_ingestion_pipeline(
                         new_seg = SegmentationResult(
                             id=seg_id,
                             case_id=str(case.id),
-                            study_id=study_id,
                             model_name="totalsegmentator",
+                            model_version="pending",
                             status="queued",
                         )
                         db.add(new_seg)
@@ -213,7 +213,7 @@ def run_segmentation_pipeline(
     6. Identify fracture fragments
     7. Update database with results
     """
-    from app.pipelines.segmentation.pipeline import SegmentationPipeline
+    from pipelines.segmentation.pipeline import SegmentationPipeline
 
     task_logger.info(
         f"Starting segmentation | seg_id={segmentation_id} | model={model_name}"
@@ -263,6 +263,7 @@ def run_segmentation_pipeline(
                             id=plan_id,
                             case_id=case_id,
                             segmentation_id=segmentation_id,
+                            model_name="supervised_v1",
                             status="generating",
                             plan_version=1,
                         )
@@ -320,7 +321,7 @@ def run_mesh_extraction_pipeline(
 
     Loads existing segmentation mask and re-extracts meshes.
     """
-    from app.pipelines.mesh_extraction.pipeline import MeshExtractionPipeline
+    from pipelines.mesh_extraction.pipeline import MeshExtractionPipeline
 
     task_logger.info(f"Starting mesh extraction | seg_id={segmentation_id}")
 
@@ -376,7 +377,7 @@ def run_reduction_planning_pipeline(
     6. Store plan in database
     7. Trigger occlusion analysis
     """
-    from app.pipelines.fracture_reduction.pipeline import FractureReductionPipeline
+    from pipelines.fracture_reduction.pipeline import FractureReductionPipeline
 
     task_logger.info(
         f"Starting reduction planning | plan_id={plan_id} | model={model_name}"
@@ -467,7 +468,8 @@ def run_supervised_reduction_pipeline(
         return result
     except Exception as exc:
         task_logger.error(f"Supervised reduction failed | plan_id={plan_id} | error={exc}")
-        _publish_ws_event(case_id, "pipeline_error", {
+        _publish_ws_event(case_id, {
+            "type": "pipeline_error",
             "stage": "error",
             "progress": 0,
             "message": str(exc),
@@ -528,7 +530,8 @@ async def _supervised_reduction_pipeline(
 
     # ── 2. Load CT volume ──
     task.update_state(state="PROGRESS", meta={"progress": 20, "step": "Loading CT volume"})
-    _publish_ws_event(case_id, "pipeline_progress", {
+    _publish_ws_event(case_id, {
+        "type": "pipeline_progress",
         "stage": "dicom_loading",
         "progress": 0.05,
         "message": "Loading DICOM volume...",
@@ -543,7 +546,8 @@ async def _supervised_reduction_pipeline(
     else:
         raise ValueError(f"CT volume not found at {volume_path}")
 
-    _publish_ws_event(case_id, "pipeline_progress", {
+    _publish_ws_event(case_id, {
+        "type": "pipeline_progress",
         "stage": "segmentation",
         "progress": 0.2,
         "message": "Running bone segmentation...",
@@ -563,7 +567,8 @@ async def _supervised_reduction_pipeline(
     if not fragments:
         raise ValueError(f"No fragments found in segmentation {segmentation_id}")
 
-    _publish_ws_event(case_id, "pipeline_progress", {
+    _publish_ws_event(case_id, {
+        "type": "pipeline_progress",
         "stage": "fragment_extraction",
         "progress": 0.4,
         "message": "Extracting bone fragments...",
@@ -589,7 +594,8 @@ async def _supervised_reduction_pipeline(
 
     # ── 5. Run supervised inference ──
     task.update_state(state="PROGRESS", meta={"progress": 40, "step": "Running supervised model inference"})
-    _publish_ws_event(case_id, "pipeline_progress", {
+    _publish_ws_event(case_id, {
+        "type": "pipeline_progress",
         "stage": "supervised_inference",
         "progress": 0.6,
         "message": "Running AI-guided fracture reduction...",
@@ -611,7 +617,8 @@ async def _supervised_reduction_pipeline(
 
     # ── 6. Confidence gating ──
     task.update_state(state="PROGRESS", meta={"progress": 70, "step": "Evaluating prediction confidence"})
-    _publish_ws_event(case_id, "pipeline_progress", {
+    _publish_ws_event(case_id, {
+        "type": "pipeline_progress",
         "stage": "confidence_evaluation",
         "progress": 0.8,
         "message": "Evaluating clinical confidence...",
@@ -757,7 +764,8 @@ async def _supervised_reduction_pipeline(
     # ── 9. Chain to occlusion analysis ──
     run_occlusion_analysis_pipeline.delay(plan_id=plan_id, case_id=case_id)
 
-    _publish_ws_event(case_id, "pipeline_complete", {
+    _publish_ws_event(case_id, {
+        "type": "pipeline_complete",
         "stage": "complete",
         "progress": 1.0,
         "message": "Reduction plan ready for review",
@@ -857,7 +865,7 @@ def run_occlusion_analysis_pipeline(
     Standalone occlusion analysis task.
     Computes occlusal metrics for a completed reduction plan.
     """
-    from app.pipelines.occlusion_planning.pipeline import OcclusionPlanningPipeline
+    from pipelines.occlusion_planning.pipeline import OcclusionPlanningPipeline
 
     task_logger.info(f"Starting occlusion analysis | plan_id={plan_id}")
 

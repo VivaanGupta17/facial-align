@@ -3,7 +3,7 @@ import { RotateCcw, Cpu, Check, X, Undo2, Redo2, Lock, Unlock, Move3d, Save, XCi
 import { usePlanningStore } from '../../stores/planningStore'
 import { planningApi } from '../../lib/api'
 import { ConfidenceBadge } from '../common/ConfidenceBar'
-import type { FragmentTransform } from '../../types/medical'
+import type { FragmentTransform, Transform3D } from '../../types/medical'
 
 interface TransformSliderProps {
   label: string
@@ -146,7 +146,7 @@ export default function FragmentControls() {
   const hasSuggestion = !!fragment.suggestedTransform
 
   // Debounced auto-save to backend
-  const debouncedSave = useCallback((fragmentId: string, transform: unknown) => {
+  const debouncedSave = useCallback((fragmentId: string, transform: Transform3D) => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current)
     }

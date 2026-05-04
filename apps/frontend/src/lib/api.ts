@@ -1,22 +1,29 @@
 /**
  * Facial Align API Client
- * Typed API client for all backend endpoints.
- * All functions make real HTTP calls to the FastAPI backend.
+ * Normalizes backend `/api/v1` responses into the frontend's current UI model.
  */
 
 import type {
-  SurgicalCase,
+  AngleClass,
+  BoundingBox,
   CaseListItem,
-  CaseStudyInfo,
-  Study,
-  SegmentationResult,
-  ReductionPlan,
-  DashboardStats,
-  SystemHealth,
-  SurgeonReview,
-  PaginatedResponse,
   CaseStatus,
+  CaseStudyInfo,
   CaseType,
+  DashboardStats,
+  FragmentTransform as UiFragmentTransform,
+  OcclusalConstraints,
+  PaginatedResponse,
+  ReductionPlan,
+  ReviewChecklist,
+  SegmentationResult,
+  StructureLabel,
+  Study,
+  SurgeonReview,
+  SurgicalCase,
+  SystemHealth,
+  Transform3D as UiTransform3D,
+  Vector3,
 } from '../types/medical'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -30,55 +37,989 @@ interface FetchOptions extends Omit<RequestInit, 'body'> {
   params?: Record<string, string | number | boolean | string[] | undefined>
 }
 
-async function fetchApi<T>(
-  path: string,
-  options: FetchOptions = {}
-): Promise<T> {
-  const { body, params, ...init } = options
+function buildQueryString(params?: FetchOptions['params']): string {
+  if (!params) return ''
 
-  // Build query string
-  let url = `${BASE_URL}${path}`
-  if (params) {
-    const searchParams = new URLSearchParams()
-    Object.entries(params).forEach(([k, v]) => {
-      if (v !== undefined && v !== null) {
-        if (Array.isArray(v)) {
-          v.forEach(item => searchParams.append(k, String(item)))
-        } else {
-          searchParams.set(k, String(v))
-        }
-      }
-    })
-    const qs = searchParams.toString()
-    if (qs) url += `?${qs}`
-  }
-
-  const res = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
-      ...(init.headers as Record<string, string> || {}),
-    },
-    ...init,
-    body: body ? JSON.stringify(body) : undefined,
+  const searchParams = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null) return
+    if (Array.isArray(value)) {
+      value.forEach((item) => searchParams.append(key, String(item)))
+      return
+    }
+    searchParams.set(key, String(value))
   })
 
-  if (res.status === 401) {
+  const qs = searchParams.toString()
+  return qs ? `?${qs}` : ''
+}
+
+function authHeaders(includeJson = false): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+  }
+  if (includeJson) {
+    headers['Content-Type'] = 'application/json'
+  }
+  return headers
+}
+
+async function fetchApi<T>(path: string, options: FetchOptions = {}): Promise<T> {
+  const { body, params, headers, ...init } = options
+  const response = await fetch(`${BASE_URL}${path}${buildQueryString(params)}`, {
+    ...init,
+    headers: {
+      ...authHeaders(body !== undefined),
+      ...(headers as Record<string, string> | undefined),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+
+  if (response.status === 401) {
     localStorage.removeItem('auth_token')
     localStorage.removeItem('refresh_token')
     window.location.href = '/login'
     throw new Error('Session expired')
   }
 
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail ?? error.message ?? `HTTP ${res.status}`)
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(
+      error.detail ??
+      error.message ??
+      error.error ??
+      `HTTP ${response.status}`
+    )
   }
 
-  // Handle 204 No Content
-  if (res.status === 204) return undefined as unknown as T
+  if (response.status === 204) {
+    return undefined as T
+  }
 
-  return res.json() as Promise<T>
+  return response.json() as Promise<T>
+}
+
+// ---------------------------
+// Shared helpers
+// ---------------------------
+
+const DEFAULT_VECTOR: Vector3 = { x: 0, y: 0, z: 0 }
+
+const BACKEND_TO_FRONTEND_STATUS: Record<string, CaseStatus> = {
+  CREATED: 'processing',
+  DICOM_PROCESSING: 'processing',
+  SEGMENTED: 'segmentation_review',
+  PLANNING: 'planning',
+  PLANNED: 'review',
+  REVIEWED: 'review',
+  APPROVED: 'approved',
+  ARCHIVED: 'archived',
+  FAILED: 'rejected',
+}
+
+const FRONTEND_TO_BACKEND_STATUS: Record<string, string> = {
+  pending_upload: 'CREATED',
+  uploading: 'DICOM_PROCESSING',
+  processing: 'DICOM_PROCESSING',
+  segmentation_in_progress: 'SEGMENTED',
+  segmentation_review: 'SEGMENTED',
+  planning: 'PLANNING',
+  review: 'REVIEWED',
+  approved: 'APPROVED',
+  rejected: 'FAILED',
+  completed: 'APPROVED',
+  archived: 'ARCHIVED',
+}
+
+const STRUCTURE_LABEL_MAP: Record<string, StructureLabel> = {
+  mandible: 'mandible',
+  maxilla: 'maxilla',
+  zygoma_l: 'zygoma_left',
+  zygoma_r: 'zygoma_right',
+  zygoma_left: 'zygoma_left',
+  zygoma_right: 'zygoma_right',
+  orbital_floor_l: 'orbit_left',
+  orbital_floor_r: 'orbit_right',
+  orbit_left: 'orbit_left',
+  orbit_right: 'orbit_right',
+  frontal_bone: 'frontal_bone',
+  nasal_bones: 'nasal_bones',
+  teeth_upper: 'teeth_upper',
+  teeth_lower: 'teeth_lower',
+  temporal_bone_l: 'temporal_left',
+  temporal_bone_r: 'temporal_right',
+  temporal_left: 'temporal_left',
+  temporal_right: 'temporal_right',
+  pterygoid_plates: 'sphenoid',
+  sphenoid: 'sphenoid',
+  skull_base: 'skull_base',
+  fragment_1: 'fragment_1',
+  fragment_2: 'fragment_2',
+  fragment_3: 'fragment_3',
+  fragment_4: 'fragment_4',
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function safeNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function toColorHex(rgb?: number[] | null): string {
+  if (!rgb || rgb.length !== 3) return '#64748b'
+  return `#${rgb.map((value) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, '0')).join('')}`
+}
+
+function toStructureLabel(name: string): StructureLabel {
+  const normalized = name.trim().toLowerCase().replace(/[\s-]+/g, '_')
+  return STRUCTURE_LABEL_MAP[normalized] ?? (normalized as StructureLabel)
+}
+
+function vectorFromList(values?: number[] | null): Vector3 {
+  if (!values || values.length < 3) return DEFAULT_VECTOR
+  return {
+    x: safeNumber(values[0]),
+    y: safeNumber(values[1]),
+    z: safeNumber(values[2]),
+  }
+}
+
+function makeBoundingBox(bounds?: BackendBoundingBox | null): BoundingBox {
+  const min = {
+    x: safeNumber(bounds?.minX),
+    y: safeNumber(bounds?.minY),
+    z: safeNumber(bounds?.minZ),
+  }
+  const max = {
+    x: safeNumber(bounds?.maxX),
+    y: safeNumber(bounds?.maxY),
+    z: safeNumber(bounds?.maxZ),
+  }
+
+  return {
+    min,
+    max,
+    center: {
+      x: (min.x + max.x) / 2,
+      y: (min.y + max.y) / 2,
+      z: (min.z + max.z) / 2,
+    },
+  }
+}
+
+function frontendStatusFromBackend(status: string): CaseStatus {
+  return BACKEND_TO_FRONTEND_STATUS[status] ?? 'processing'
+}
+
+function backendStatusFromFrontend(status: string): string {
+  return FRONTEND_TO_BACKEND_STATUS[status] ?? status
+}
+
+function inferTraumaSubtype(text: string | null | undefined): CaseType {
+  const normalized = (text ?? '').toLowerCase()
+  if (normalized.includes('panfacial')) return 'panfacial_fracture'
+  if (normalized.includes('orbital') || normalized.includes('orbit')) return 'orbital_fracture'
+  if (normalized.includes('midface') || normalized.includes('le fort') || normalized.includes('zygoma')) {
+    return 'midface_fracture'
+  }
+  if (normalized.includes('frontal')) return 'frontal_sinus_fracture'
+  if (normalized.includes('mandible') || normalized.includes('mandib')) return 'mandible_fracture'
+  return 'mandible_fracture'
+}
+
+function frontendCaseTypeFromBackend(
+  caseType: string,
+  fractureClassification?: string | null,
+  plannedProcedure?: string | null,
+): CaseType {
+  switch (caseType) {
+    case 'ORTHOGNATHIC':
+      return 'orthognathic'
+    case 'RECONSTRUCTION':
+      return plannedProcedure?.toLowerCase().includes('tumor') ? 'tumor_resection' : 'reconstruction'
+    case 'TMJ':
+      return 'other'
+    case 'OTHER':
+      return 'other'
+    case 'TRAUMA':
+    default:
+      return inferTraumaSubtype(fractureClassification ?? plannedProcedure)
+  }
+}
+
+function backendCaseTypeFromFrontend(caseType: CaseType): string {
+  switch (caseType) {
+    case 'orthognathic':
+      return 'ORTHOGNATHIC'
+    case 'tumor_resection':
+    case 'reconstruction':
+      return 'RECONSTRUCTION'
+    case 'other':
+      return 'OTHER'
+    default:
+      return 'TRAUMA'
+  }
+}
+
+function buildSyntheticPaginatedResponse<T>(
+  items: T[],
+  page: number,
+  pageSize: number,
+): PaginatedResponse<T> {
+  const hasMore = items.length === pageSize
+  const total = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + items.length
+  const pages = hasMore ? page + 1 : Math.max(page, 1)
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    pages,
+    hasMore,
+  }
+}
+
+function parseAngleClass(value?: string | null): AngleClass {
+  const normalized = (value ?? 'Class_I').replace(/[^a-z0-9]/gi, '').toLowerCase()
+  switch (normalized) {
+    case 'classii':
+    case 'classiidiv1':
+      return 'II'
+    case 'classiidiv2':
+      return 'IIb'
+    case 'classiii':
+      return 'III'
+    default:
+      return 'I'
+  }
+}
+
+function magnitude(transform: UiTransform3D): number {
+  return Math.sqrt(
+    transform.translation.x ** 2 +
+    transform.translation.y ** 2 +
+    transform.translation.z ** 2
+  )
+}
+
+function matrixToEulerDegrees(matrix?: number[][] | null): Vector3 {
+  if (!matrix || matrix.length !== 3 || matrix.some((row) => row.length !== 3)) {
+    return DEFAULT_VECTOR
+  }
+
+  const sy = Math.sqrt((matrix[0][0] ** 2) + (matrix[1][0] ** 2))
+  const singular = sy < 1e-6
+
+  let x: number
+  let y: number
+  let z: number
+
+  if (!singular) {
+    x = Math.atan2(matrix[2][1], matrix[2][2])
+    y = Math.atan2(-matrix[2][0], sy)
+    z = Math.atan2(matrix[1][0], matrix[0][0])
+  } else {
+    x = Math.atan2(-matrix[1][2], matrix[1][1])
+    y = Math.atan2(-matrix[2][0], sy)
+    z = 0
+  }
+
+  const radToDeg = 180 / Math.PI
+  return {
+    x: x * radToDeg,
+    y: y * radToDeg,
+    z: z * radToDeg,
+  }
+}
+
+function eulerDegreesToMatrix(rotation: Vector3): number[][] {
+  const degToRad = Math.PI / 180
+  const x = rotation.x * degToRad
+  const y = rotation.y * degToRad
+  const z = rotation.z * degToRad
+
+  const cx = Math.cos(x)
+  const sx = Math.sin(x)
+  const cy = Math.cos(y)
+  const sy = Math.sin(y)
+  const cz = Math.cos(z)
+  const sz = Math.sin(z)
+
+  return [
+    [(cz * cy), (cz * sy * sx) - (sz * cx), (cz * sy * cx) + (sz * sx)],
+    [(sz * cy), (sz * sy * sx) + (cz * cx), (sz * sy * cx) - (cz * sx)],
+    [(-sy), (cy * sx), (cy * cx)],
+  ]
+}
+
+function frontendTransformFromBackend(transform?: BackendRigidTransform | null): UiTransform3D {
+  return {
+    translation: vectorFromList(transform?.translationMm),
+    rotation: matrixToEulerDegrees(transform?.rotationMatrix),
+    scale: { x: 1, y: 1, z: 1 },
+  }
+}
+
+function backendTransformFromFrontend(transform: UiTransform3D): BackendRigidTransform {
+  return {
+    rotationMatrix: eulerDegreesToMatrix(transform.rotation),
+    translationMm: [
+      safeNumber(transform.translation.x),
+      safeNumber(transform.translation.y),
+      safeNumber(transform.translation.z),
+    ],
+  }
+}
+
+function mapStudyFromListItem(item: BackendStudyListItem): Study {
+  return {
+    id: item.id,
+    patientId: item.patientId,
+    accessionNumber: item.studyUid,
+    studyDescription: `Study ${item.studyUid.slice(0, 12)}`,
+    studyDate: item.acquisitionDate ?? item.createdAt,
+    studyInstanceUid: item.studyUid,
+    referringPhysician: '',
+    institutionName: '',
+    series: [
+      {
+        seriesInstanceUid: item.studyUid,
+        modality: item.modality as 'CT' | 'CBCT' | 'MRI' | 'OPG',
+        description: 'Primary Series',
+        sliceCount: 0,
+        sliceThicknessMm: 1.0,
+        acquisitionDate: item.acquisitionDate ?? item.createdAt,
+        bodyPart: 'Craniofacial',
+        pixelSpacingMm: [1, 1],
+        rows: 0,
+        cols: 0,
+        sopClassUid: '',
+      },
+    ],
+    uploadedAt: item.createdAt,
+    uploadedBy: '',
+    fileSizeBytes: 0,
+    fileCount: item.seriesCount,
+    storageUri: '',
+  }
+}
+
+function mapStudyFromMetadata(studyId: string, metadata: BackendStudyMetadata): Study {
+  return {
+    id: studyId,
+    patientId: '',
+    accessionNumber: metadata.studyUid,
+    studyDescription: metadata.studyDescription ?? 'Imaging Study',
+    studyDate: metadata.acquisitionDate ?? new Date().toISOString(),
+    studyInstanceUid: metadata.studyUid,
+    referringPhysician: '',
+    institutionName: metadata.institutionName ?? '',
+    series: metadata.series.map((series) => ({
+      seriesInstanceUid: series.seriesInstanceUid,
+      modality: series.modality as 'CT' | 'CBCT' | 'MRI' | 'OPG',
+      description: series.seriesDescription ?? 'Series',
+      sliceCount: series.sliceCount,
+      sliceThicknessMm: series.sliceThicknessMm ?? 1.0,
+      acquisitionDate: metadata.acquisitionDate ?? new Date().toISOString(),
+      bodyPart: metadata.bodyPartExamined ?? 'Craniofacial',
+      pixelSpacingMm: (series.pixelSpacingMm?.length === 2
+        ? [series.pixelSpacingMm[0], series.pixelSpacingMm[1]]
+        : [1, 1]) as [number, number],
+      rows: 0,
+      cols: 0,
+      sopClassUid: '',
+    })),
+    uploadedAt: metadata.acquisitionDate ?? new Date().toISOString(),
+    uploadedBy: '',
+    fileSizeBytes: 0,
+    fileCount: metadata.totalSliceCount,
+    storageUri: '',
+  }
+}
+
+function mapCaseStudy(info: BackendCaseStudyInfo): CaseStudyInfo {
+  return {
+    id: info.id,
+    studyId: info.studyId,
+    studyRole: info.studyRole as CaseStudyInfo['studyRole'],
+    studyLabel: info.studyLabel,
+    isPrimary: info.isPrimary,
+    displayOrder: info.displayOrder,
+    createdAt: info.createdAt,
+    studyUid: info.studyUid,
+    modality: info.modality,
+    acquisitionDate: info.acquisitionDate,
+    ingestionStatus: info.ingestionStatus,
+  }
+}
+
+function mapCaseListItem(item: BackendCaseListItem): CaseListItem {
+  return {
+    id: item.id,
+    caseNumber: item.caseNumber,
+    patientId: item.patientId,
+    caseType: frontendCaseTypeFromBackend(item.caseType, item.fractureClassification, null),
+    status: frontendStatusFromBackend(item.status),
+    surgeonId: item.surgeonId,
+    fractureClassification: item.fractureClassification,
+    latestSegmentationStatus: item.latestSegmentationStatus ?? null,
+    latestPlanConfidence: item.latestPlanConfidence ?? null,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  }
+}
+
+function mapCaseResponse(item: BackendCaseResponse): SurgicalCase {
+  return {
+    id: item.id,
+    caseNumber: item.caseNumber,
+    patientId: item.patientId,
+    studyId: item.studyId,
+    caseType: frontendCaseTypeFromBackend(item.caseType, item.fractureClassification, item.plannedProcedure),
+    status: frontendStatusFromBackend(item.status),
+    surgeonId: item.surgeonId,
+    reviewerId: item.reviewerId,
+    fractureClassification: item.fractureClassification,
+    plannedProcedure: item.plannedProcedure,
+    diagnosisCodes: item.diagnosisCodes,
+    targetSurgeryDate: item.targetSurgeryDate,
+    teamIds: item.teamIds,
+    currentTaskId: item.currentTaskId,
+    lastError: item.lastError,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    approvedAt: item.approvedAt,
+    createdBy: item.createdBy,
+    latestSegmentation: item.latestSegmentation?.id ?? null,
+    latestPlan: item.latestPlan?.id ?? null,
+    segmentationCount: item.segmentationCount,
+    planCount: item.planCount,
+    allowedTransitions: (item.allowedTransitions ?? []).map(frontendStatusFromBackend),
+    studies: (item.studies ?? []).map(mapCaseStudy),
+  }
+}
+
+function mapSegmentationResult(result: BackendSegmentationResult): SegmentationResult {
+  const confidenceByName = new Map(
+    (result.confidenceMaps ?? []).map((entry) => [entry.structureName, entry])
+  )
+  const meshByName = new Map<string, string>()
+  for (const mesh of result.meshes ?? []) {
+    if (!meshByName.has(mesh.structureName)) {
+      meshByName.set(mesh.structureName, mesh.path)
+    }
+  }
+
+  const structures = (result.structureLabels ?? []).map((label) => {
+    const review = result.structureReviews?.[label.name] ?? {}
+    const confidenceMap = confidenceByName.get(label.name)
+    const value = safeNumber(confidenceMap?.meanConfidence, result.overallConfidence ?? 0.5)
+    const threshold = 0.75
+    const boundingBox = makeBoundingBox(confidenceMap?.boundingBox)
+
+    return {
+      label: toStructureLabel(label.name),
+      displayName: titleCase(label.name),
+      confidence: {
+        value,
+        threshold,
+        passesClinicalThreshold: value >= threshold,
+      },
+      volumeCm3: safeNumber(confidenceMap?.volumeCc),
+      surfaceAreaCm2: 0,
+      centroid: boundingBox.center,
+      boundingBox,
+      meshUri: meshByName.get(label.name) ?? '',
+      color: toColorHex(label.colorRgb),
+      opacity: 1,
+      status: (review.status ?? (value >= threshold ? 'accepted' : 'flagged')) as SegmentationResult['structures'][number]['status'],
+      fragmentCount: (result.fractureFragments ?? []).filter(
+        (fragment) => fragment.parentStructure === label.name
+      ).length || undefined,
+    }
+  })
+
+  const overallConfidence = safeNumber(result.overallConfidence, 0)
+  const warnings = result.provenance?.warnings ?? []
+
+  return {
+    id: result.id,
+    caseId: result.caseId,
+    jobId: '',
+    modelName: result.modelName,
+    modelVersion: result.modelVersion,
+    inferenceTimeSeconds: safeNumber(result.inferenceTimeMs) / 1000,
+    structures,
+    overallConfidence: {
+      value: overallConfidence,
+      threshold: 0.75,
+      passesClinicalThreshold: overallConfidence >= 0.75,
+    },
+    warnings,
+    createdAt: result.createdAt,
+    completedAt: result.completedAt ?? result.createdAt,
+    gpuUsed: result.gpuDevice ?? 'Unavailable',
+  }
+}
+
+function mapPlanConstraints(constraints?: BackendOcclusalConstraints | null): OcclusalConstraints {
+  return {
+    enforceOverjet: true,
+    enforceOverbite: true,
+    enforceMidline: true,
+    enforceSymmetry: true,
+    enforceCondylarSeating: constraints?.bilateralCondylarSeating ?? true,
+    maxCondylarDeviationMm: 2,
+  }
+}
+
+function mapPlanValidations(plan: BackendReductionPlanResponse): ReductionPlan['validations'] {
+  const metrics = plan.occlusalMetrics
+  const warnings = plan.provenance?.warnings ?? []
+  const midline = safeNumber(metrics?.midlineDeviationMm)
+  const cant = safeNumber(metrics?.cantDegrees)
+  const overjet = safeNumber(metrics?.overjetMm)
+
+  return [
+    {
+      name: 'Midline Alignment',
+      description: 'Dental midlines remain within the clinical tolerance.',
+      passed: midline <= safeNumber(plan.occlusalConstraints?.midlineToleranceMm, 1),
+      value: midline,
+      threshold: safeNumber(plan.occlusalConstraints?.midlineToleranceMm, 1),
+      severity: 'warning',
+    },
+    {
+      name: 'Occlusal Cant',
+      description: 'Occlusal cant remains below the requested threshold.',
+      passed: cant <= safeNumber(plan.occlusalConstraints?.cantToleranceDegrees, 2),
+      value: cant,
+      threshold: safeNumber(plan.occlusalConstraints?.cantToleranceDegrees, 2),
+      severity: 'warning',
+    },
+    {
+      name: 'Overjet',
+      description: 'Anterior overjet remains close to the requested target.',
+      passed: Math.abs(overjet - safeNumber(plan.occlusalConstraints?.targetOverjetMm, 2)) <= 2,
+      value: overjet,
+      threshold: safeNumber(plan.occlusalConstraints?.targetOverjetMm, 2),
+      severity: 'info',
+    },
+    ...warnings.map((warning, index) => ({
+      name: `Pipeline Warning ${index + 1}`,
+      description: warning,
+      passed: false,
+      severity: 'warning' as const,
+    })),
+  ]
+}
+
+function mapPlanFragments(plan: BackendReductionPlanResponse): UiFragmentTransform[] {
+  const fragmentInfo = plan.fragments ?? {}
+  const transforms = plan.fragmentTransforms ?? []
+
+  const transformed = transforms.length > 0
+    ? transforms
+    : Object.keys(fragmentInfo).map((fragmentId) => ({
+        fragmentId,
+        fragmentLabel: safeNumber(fragmentInfo[fragmentId]?.fragmentLabel),
+        transform: {
+          rotationMatrix: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+          translationMm: [0, 0, 0],
+        },
+        confidence: safeNumber(plan.confidenceScore, 0.5),
+        isReferenceFragment: false,
+      }))
+
+  return transformed.map((fragment, index) => {
+    const info = fragmentInfo[fragment.fragmentId]
+    const currentTransform = frontendTransformFromBackend(fragment.transform)
+    const structureLabel = info?.parentStructure
+      ? toStructureLabel(info.parentStructure)
+      : (`fragment_${clamp(index + 1, 1, 4)}` as StructureLabel)
+
+    const centroid = vectorFromList(info?.centroidMm)
+    const displayBase = info?.parentStructure
+      ? `${titleCase(info.parentStructure)} Fragment`
+      : titleCase(fragment.fragmentId)
+
+    return {
+      fragmentId: fragment.fragmentId,
+      structureLabel,
+      displayName: `${displayBase} ${index + 1}`,
+      baseTransform: currentTransform,
+      currentTransform,
+      suggestedTransform: currentTransform,
+      suggestionConfidence: fragment.confidence ?? plan.confidenceScore ?? 0.5,
+      isAligned: fragment.isReferenceFragment || magnitude(currentTransform) < 2,
+      isLocked: false,
+      volumeCm3: safeNumber(info?.volumeCc),
+      centroid,
+    }
+  })
+}
+
+function mapPlanResponse(plan: BackendReductionPlanResponse): ReductionPlan {
+  const overjetTarget = safeNumber(plan.occlusalConstraints?.targetOverjetMm, 2)
+  const overbiteTargetMm = safeNumber(plan.occlusalConstraints?.targetOverbiteMm, 3)
+  const midlineTolerance = safeNumber(plan.occlusalConstraints?.midlineToleranceMm, 1)
+  const cantTolerance = safeNumber(plan.occlusalConstraints?.cantToleranceDegrees, 2)
+  const metrics = plan.occlusalMetrics
+
+  return {
+    id: plan.id,
+    caseId: plan.caseId,
+    version: plan.planVersion,
+    name: `Reduction Plan v${plan.planVersion}`,
+    description: plan.provenance?.fallbackReason
+      ? `${titleCase(plan.modelName ?? 'planner')} with explicit fallback handling`
+      : `Generated with ${plan.modelName ?? 'baseline planner'}`,
+    fragmentTransforms: mapPlanFragments(plan),
+    occlusalMetrics: {
+      overjetMm: safeNumber(metrics?.overjetMm, overjetTarget),
+      overjetIdealMin: Math.max(0, overjetTarget - 1),
+      overjetIdealMax: overjetTarget + 1,
+      overbitePercent: clamp(safeNumber(metrics?.overbiteMm, overbiteTargetMm) * 10, 0, 100),
+      overbiteIdealMin: 15,
+      overbiteIdealMax: 35,
+      midlineDeviationMm: safeNumber(metrics?.midlineDeviationMm),
+      midlineDeviationThreshold: midlineTolerance,
+      occlusalCantDeg: safeNumber(metrics?.cantDegrees),
+      molarRelationshipLeft: parseAngleClass(metrics?.molarRelationship),
+      molarRelationshipRight: parseAngleClass(metrics?.molarRelationship),
+      canineRelationshipLeft: parseAngleClass(metrics?.molarRelationship),
+      canineRelationshipRight: parseAngleClass(metrics?.molarRelationship),
+    },
+    constraints: mapPlanConstraints(plan.occlusalConstraints),
+    validations: mapPlanValidations(plan),
+    aiConfidence: safeNumber(plan.confidenceScore, 0.75),
+    aiRecommendation: plan.provenance?.warnings?.[0] ?? 'Review the proposed reduction and confirm each fragment position.',
+    isApproved: plan.surgeonApproved,
+    createdAt: plan.createdAt,
+    updatedAt: plan.approvedAt ?? plan.createdAt,
+    createdBy: plan.approvedBy ?? 'system',
+  }
+}
+
+function mapReviewResponse(review: BackendReviewResponse): SurgeonReview {
+  return {
+    id: review.id,
+    caseId: review.caseId,
+    planId: review.planId ?? '',
+    reviewerId: review.reviewerId,
+    reviewerName: review.reviewerName,
+    decision: review.decision as SurgeonReview['decision'],
+    notes: review.notes,
+    checklist: review.checklist as ReviewChecklist[],
+    signedAt: review.signedAt ?? undefined,
+    createdAt: review.createdAt,
+    updatedAt: review.updatedAt,
+  }
+}
+
+async function getLatestSegmentationId(caseId: string): Promise<string> {
+  const caseData = await fetchApi<BackendCaseResponse>(`/cases/${caseId}`)
+  if (caseData.latestSegmentation?.id) {
+    return caseData.latestSegmentation.id
+  }
+
+  const segmentations = await fetchApi<BackendSegmentationResult[]>(`/segmentation/cases/${caseId}`)
+  if (!segmentations.length) {
+    throw new Error('No completed segmentation is available for this case')
+  }
+
+  return segmentations[0].id
+}
+
+async function getFragmentTransformForAction(
+  planId: string,
+  fragmentId: string,
+  type: 'suggested' | 'base',
+): Promise<UiTransform3D> {
+  const plan = await planningApi.getPlan(planId)
+  const fragment = plan.fragmentTransforms.find((item) => item.fragmentId === fragmentId)
+  if (!fragment) {
+    throw new Error(`Fragment ${fragmentId} not found in plan ${planId}`)
+  }
+
+  return type === 'suggested'
+    ? (fragment.suggestedTransform ?? fragment.currentTransform)
+    : fragment.baseTransform
+}
+
+// ---------------------------
+// Backend DTOs
+// ---------------------------
+
+interface BackendBoundingBox {
+  minX: number
+  minY: number
+  minZ: number
+  maxX: number
+  maxY: number
+  maxZ: number
+}
+
+interface BackendRigidTransform {
+  rotationMatrix: number[][]
+  translationMm: number[]
+}
+
+interface BackendCaseListItem {
+  id: string
+  caseNumber: string
+  patientId: string
+  caseType: string
+  status: string
+  surgeonId: string | null
+  fractureClassification: string | null
+  latestSegmentationStatus: string | null
+  latestPlanConfidence: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface BackendCaseSummary {
+  id: string
+}
+
+interface BackendCaseStudyInfo {
+  id: string
+  studyId: string
+  studyRole: string
+  studyLabel: string | null
+  isPrimary: boolean
+  displayOrder: number
+  createdAt: string
+  studyUid: string | null
+  modality: string | null
+  acquisitionDate: string | null
+  ingestionStatus: string | null
+}
+
+interface BackendCaseResponse extends BackendCaseListItem {
+  studyId: string
+  reviewerId: string | null
+  plannedProcedure: string | null
+  diagnosisCodes: string[] | null
+  targetSurgeryDate: string | null
+  teamIds: string[] | null
+  currentTaskId: string | null
+  lastError: string | null
+  approvedAt: string | null
+  createdBy: string | null
+  latestSegmentation: BackendCaseSummary | null
+  latestPlan: BackendCaseSummary | null
+  segmentationCount: number
+  planCount: number
+  studies: BackendCaseStudyInfo[]
+  allowedTransitions: string[]
+}
+
+interface BackendPaginatedResponse<T> {
+  items: T[]
+  total: number
+  page: number
+  pageSize: number
+  pages: number
+  hasMore: boolean
+}
+
+interface BackendStudyListItem {
+  id: string
+  studyUid: string
+  patientId: string
+  modality: string
+  acquisitionDate: string | null
+  seriesCount: number
+  ingestionStatus: string
+  qualityScore: number | null
+  createdAt: string
+}
+
+interface BackendSeriesInfo {
+  seriesInstanceUid: string
+  seriesDescription: string | null
+  modality: string
+  sliceCount: number
+  sliceThicknessMm: number | null
+  pixelSpacingMm?: number[] | null
+}
+
+interface BackendStudyMetadata {
+  studyUid: string
+  modality: string
+  acquisitionDate: string | null
+  bodyPartExamined: string | null
+  studyDescription: string | null
+  institutionName: string | null
+  totalSliceCount: number
+  series: BackendSeriesInfo[]
+  [key: string]: unknown
+}
+
+interface BackendUploadResponse {
+  studyId: string
+  patientId: string
+  ingestionJobId: string
+}
+
+interface BackendProvenanceInfo {
+  algorithmUsed: string
+  validationTier: string
+  betaStatus: string
+  warnings?: string[]
+  fallbackReason?: string | null
+  modelVersion?: string | null
+}
+
+interface BackendStructureLabel {
+  name: string
+  labelValue: number
+  colorRgb?: number[] | null
+}
+
+interface BackendConfidenceMap {
+  structureName: string
+  meanConfidence: number
+  volumeCc?: number | null
+  boundingBox?: BackendBoundingBox | null
+}
+
+interface BackendMeshInfo {
+  structureName: string
+  format: string
+  path: string
+}
+
+interface BackendSegmentationResult {
+  id: string
+  caseId: string
+  status: string
+  modelName: string
+  modelVersion: string
+  structureLabels?: BackendStructureLabel[] | null
+  confidenceMaps?: BackendConfidenceMap[] | null
+  structureReviews?: Record<string, { status?: string }> | null
+  overallConfidence?: number | null
+  provenance?: BackendProvenanceInfo | null
+  meshes?: BackendMeshInfo[] | null
+  fractureFragments?: Array<{ parentStructure?: string | null }> | null
+  inferenceTimeMs?: number | null
+  gpuDevice?: string | null
+  createdAt: string
+  completedAt?: string | null
+}
+
+interface BackendFragmentInfo {
+  fragmentId: string
+  fragmentLabel: number
+  meshPath?: string | null
+  volumeCc?: number | null
+  centroidMm?: number[] | null
+  parentStructure?: string | null
+}
+
+interface BackendFragmentTransform {
+  fragmentId: string
+  fragmentLabel: number
+  transform: BackendRigidTransform
+  confidence: number
+  isReferenceFragment?: boolean
+}
+
+interface BackendOcclusalConstraints {
+  targetOverjetMm?: number
+  targetOverbiteMm?: number
+  molarClassTarget?: string
+  midlineToleranceMm?: number
+  cantToleranceDegrees?: number
+  bilateralCondylarSeating?: boolean
+}
+
+interface BackendOcclusalMetrics {
+  overjetMm?: number | null
+  overbiteMm?: number | null
+  molarRelationship?: string | null
+  midlineDeviationMm?: number | null
+  cantDegrees?: number | null
+}
+
+interface BackendReductionPlanResponse {
+  id: string
+  caseId: string
+  segmentationId?: string | null
+  planVersion: number
+  status: string
+  modelName?: string | null
+  modelVersion?: string | null
+  fragments?: Record<string, BackendFragmentInfo> | null
+  fragmentTransforms?: BackendFragmentTransform[] | null
+  occlusalConstraints?: BackendOcclusalConstraints | null
+  occlusalMetrics?: BackendOcclusalMetrics | null
+  confidenceScore?: number | null
+  provenance?: BackendProvenanceInfo | null
+  surgeonApproved: boolean
+  approvedAt?: string | null
+  approvedBy?: string | null
+  createdAt: string
+}
+
+interface BackendReviewResponse {
+  id: string
+  caseId: string
+  planId?: string | null
+  reviewerId: string
+  reviewerName: string
+  decision: string
+  notes: string
+  checklist: ReviewChecklist[]
+  signedAt?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface BackendCapabilityEntry {
+  name: string
+  category: string
+  modelVersion?: string | null
+}
+
+interface BackendCapabilitiesResponse {
+  generatedAt: string
+  capabilities: BackendCapabilityEntry[]
+}
+
+interface BackendHealthComponent {
+  name: string
+  status: string
+  message?: string | null
+}
+
+interface BackendHealthResponse {
+  status: string
+  version: string
+  timestamp: string
+  gpuAvailable: boolean
+  gpuDevices: string[]
+  components: BackendHealthComponent[]
+}
+
+interface BackendJobStatusResponse {
+  jobId: string
+  status: string
+  progress?: {
+    percent?: number
+    currentStep?: string | null
+  } | null
 }
 
 // ---------------------------
@@ -132,7 +1073,10 @@ export const authApi = {
     fetchApi<TokenResponse>('/auth/refresh', { method: 'POST', body: { refresh_token: refreshToken } }),
 
   changePassword: (currentPassword: string, newPassword: string) =>
-    fetchApi<void>('/auth/change-password', { method: 'POST', body: { current_password: currentPassword, new_password: newPassword } }),
+    fetchApi<void>('/auth/change-password', {
+      method: 'POST',
+      body: { current_password: currentPassword, new_password: newPassword },
+    }),
 }
 
 // ---------------------------
@@ -153,49 +1097,84 @@ export interface CasesListParams {
 }
 
 export const casesApi = {
-  /** List all cases with optional filtering */
   list: async (params: CasesListParams = {}): Promise<PaginatedResponse<CaseListItem>> => {
-    return fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
+    const response = await fetchApi<BackendPaginatedResponse<BackendCaseListItem>>('/cases', {
       params: {
         page: params.page,
         page_size: params.pageSize,
-        status: params.status?.join(','),
-        case_type: params.type?.join(','),
+        status: params.status?.[0] ? backendStatusFromFrontend(params.status[0]) : undefined,
+        case_type: params.type?.[0] ? backendCaseTypeFromFrontend(params.type[0]) : undefined,
         surgeon_id: params.surgeonId,
-        search: params.search,
         created_after: params.dateFrom,
         created_before: params.dateTo,
-        sort_by: params.sortBy,
-        sort_order: params.sortOrder,
       },
     })
+
+    return {
+      items: response.items.map(mapCaseListItem),
+      total: response.total,
+      page: response.page,
+      pageSize: response.pageSize,
+      pages: response.pages,
+      hasMore: response.hasMore,
+    }
   },
 
-  /** Get single case by ID */
   get: async (caseId: string): Promise<SurgicalCase> =>
-    fetchApi<SurgicalCase>(`/cases/${caseId}`),
+    mapCaseResponse(await fetchApi<BackendCaseResponse>(`/cases/${caseId}`)),
 
-  /** Create new case */
-  create: async (data: Partial<SurgicalCase>): Promise<SurgicalCase> =>
-    fetchApi<SurgicalCase>('/cases', { method: 'POST', body: data }),
+  create: async (data: Partial<SurgicalCase>): Promise<SurgicalCase> => {
+    if (!data.patientId || !data.studyId || !data.caseType) {
+      throw new Error('patientId, studyId, and caseType are required to create a case')
+    }
 
-  /** Update case */
-  update: async (caseId: string, data: Partial<SurgicalCase>): Promise<SurgicalCase> =>
-    fetchApi<SurgicalCase>(`/cases/${caseId}`, { method: 'PATCH', body: data }),
-
-  /** Transition case status */
-  transitionStatus: async (caseId: string, newStatus: string, notes?: string): Promise<void> =>
-    fetchApi(`/cases/${caseId}/status`, {
+    const created = await fetchApi<BackendCaseResponse>('/cases', {
       method: 'POST',
-      body: { new_status: newStatus, notes },
-    }),
-
-  /** Get recent cases for dashboard */
-  getRecent: async (limit = 10): Promise<CaseListItem[]> => {
-    const resp = await fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
-      params: { page_size: limit, sort_by: 'updatedAt', sort_order: 'desc' },
+      body: {
+        patientId: data.patientId,
+        studyId: data.studyId,
+        caseType: backendCaseTypeFromFrontend(data.caseType),
+        fractureClassification: data.fractureClassification ?? undefined,
+        plannedProcedure: data.plannedProcedure ?? undefined,
+        diagnosisCodes: data.diagnosisCodes ?? undefined,
+        targetSurgeryDate: data.targetSurgeryDate ?? undefined,
+        surgeonId: data.surgeonId ?? undefined,
+        teamIds: data.teamIds ?? undefined,
+        uploadNotes: data.lastError ?? undefined,
+      },
     })
-    return resp.items
+
+    return mapCaseResponse(created)
+  },
+
+  update: async (caseId: string, data: Partial<SurgicalCase>): Promise<SurgicalCase> => {
+    const updated = await fetchApi<BackendCaseResponse>(`/cases/${caseId}`, {
+      method: 'PATCH',
+      body: {
+        surgeonId: data.surgeonId ?? undefined,
+        reviewerId: data.reviewerId ?? undefined,
+        fractureClassification: data.fractureClassification ?? undefined,
+        plannedProcedure: data.plannedProcedure ?? undefined,
+        diagnosisCodes: data.diagnosisCodes ?? undefined,
+        targetSurgeryDate: data.targetSurgeryDate ?? undefined,
+        teamIds: data.teamIds ?? undefined,
+      },
+    })
+
+    return mapCaseResponse(updated)
+  },
+
+  transitionStatus: async (caseId: string, newStatus: string, notes?: string): Promise<SurgicalCase> => {
+    const updated = await fetchApi<BackendCaseResponse>(`/cases/${caseId}/status`, {
+      method: 'POST',
+      body: { newStatus: backendStatusFromFrontend(newStatus), notes },
+    })
+    return mapCaseResponse(updated)
+  },
+
+  getRecent: async (limit = 10): Promise<CaseListItem[]> => {
+    const response = await casesApi.list({ page: 1, pageSize: limit })
+    return response.items
   },
 }
 
@@ -203,48 +1182,68 @@ export const casesApi = {
 // Dashboard API
 // ---------------------------
 
-const ACTIVE_STATUSES: CaseStatus[] = [
-  'pending_upload', 'uploading', 'processing', 'segmentation_in_progress',
-  'segmentation_review', 'planning', 'review',
-]
-const PENDING_SEG_STATUSES: CaseStatus[] = [
-  'pending_upload', 'uploading', 'processing', 'segmentation_in_progress',
-]
-const REVIEW_STATUSES: CaseStatus[] = ['review', 'segmentation_review']
-
 export const dashboardApi = {
-  /** Compute dashboard statistics from real case data */
   getStats: async (): Promise<DashboardStats> => {
-    const [allCases, reviewCases] = await Promise.all([
-      fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
-        params: { page_size: 1 },
+    const [allCases, reviewCases, approvedCases] = await Promise.all([
+      fetchApi<BackendPaginatedResponse<BackendCaseListItem>>('/cases', { params: { page: 1, page_size: 1 } }),
+      fetchApi<BackendPaginatedResponse<BackendCaseListItem>>('/cases', {
+        params: { page: 1, page_size: 1, status: 'REVIEWED' },
       }),
-      fetchApi<PaginatedResponse<CaseListItem>>('/cases', {
-        params: { page_size: 1, status: REVIEW_STATUSES.join(',') },
+      fetchApi<BackendPaginatedResponse<BackendCaseListItem>>('/cases', {
+        params: { page: 1, page_size: 1, status: 'APPROVED' },
       }),
     ])
 
-    const totalActive = allCases.total
-    const awaitingReview = reviewCases.total
-
-    // Estimate pending segmentation from total minus review/completed
-    const pendingSegmentation = Math.max(0, totalActive - awaitingReview)
-
     return {
-      activeCases: totalActive,
+      activeCases: allCases.total,
       activeCasesDelta: 0,
-      pendingSegmentation,
+      pendingSegmentation: Math.max(0, allCases.total - reviewCases.total - approvedCases.total),
       pendingSegmentationDelta: 0,
-      awaitingReview,
+      awaitingReview: reviewCases.total,
       awaitingReviewDelta: 0,
-      completedThisMonth: 0,
+      completedThisMonth: approvedCases.total,
       completedThisMonthDelta: 0,
     }
   },
 
-  /** Get system health */
-  getSystemHealth: async (): Promise<SystemHealth> =>
-    fetchApi<SystemHealth>('/health'),
+  getSystemHealth: async (): Promise<SystemHealth> => {
+    const [health, capabilities] = await Promise.all([
+      fetchApi<BackendHealthResponse>('/health'),
+      fetchApi<BackendCapabilitiesResponse>('/capabilities'),
+    ])
+
+    return {
+      gpus: health.gpuDevices.map((name, index) => ({
+        id: String(index),
+        name,
+        utilizationPercent: 0,
+        memoryUsedGb: 0,
+        memoryTotalGb: 0,
+        temperatureCelsius: 0,
+        status: health.gpuAvailable ? 'idle' : 'offline',
+      })),
+      models: capabilities.capabilities.map((capability) => ({
+        name: capability.name,
+        version: capability.modelVersion ?? 'unknown',
+        type: capability.category === 'segmentation'
+          ? 'segmentation'
+          : capability.category === 'planning'
+          ? 'planning'
+          : 'occlusion',
+        lastUpdated: health.timestamp,
+        accuracy: 0,
+      })),
+      queue: {
+        depth: 0,
+        estimatedWaitMinutes: 0,
+        processingCount: 0,
+      },
+      apiLatencyMs: 0,
+      storageUsedGb: 0,
+      storageTotalGb: 0,
+      lastChecked: health.timestamp,
+    }
+  },
 }
 
 // ---------------------------
@@ -252,52 +1251,64 @@ export const dashboardApi = {
 // ---------------------------
 
 export const studiesApi = {
-  /** List all imaging studies (paginated) */
-  list: async (params: { page?: number; pageSize?: number; modality?: string } = {}): Promise<PaginatedResponse<Study>> =>
-    fetchApi<PaginatedResponse<Study>>('/dicom/studies', {
+  list: async (
+    params: { page?: number; pageSize?: number; modality?: string } = {}
+  ): Promise<PaginatedResponse<Study>> => {
+    const page = params.page ?? 1
+    const pageSize = params.pageSize ?? 20
+    const response = await fetchApi<BackendStudyListItem[]>('/dicom/studies', {
       params: {
-        page: params.page,
-        page_size: params.pageSize,
+        page,
+        page_size: pageSize,
         modality: params.modality,
       },
-    }),
+    })
 
-  /** Get study by ID */
+    return buildSyntheticPaginatedResponse(response.map(mapStudyFromListItem), page, pageSize)
+  },
+
   get: async (studyId: string): Promise<Study> =>
-    fetchApi<Study>(`/dicom/studies/${studyId}`),
+    mapStudyFromMetadata(studyId, await fetchApi<BackendStudyMetadata>(`/dicom/studies/${studyId}`)),
 
-  /** Upload DICOM file with progress tracking */
   upload: async (
     file: File,
-    onProgress?: (pct: number) => void
-  ): Promise<{ jobId: string; studyId: string }> => {
+    patientMrn: string,
+    onProgress?: (pct: number) => void,
+  ): Promise<{ jobId: string; studyId: string; patientId: string }> => {
+    if (!patientMrn.trim()) {
+      throw new Error('Patient MRN is required before upload')
+    }
+
     const formData = new FormData()
-    formData.append('file', file)
+    formData.append('files', file)
+    formData.append('patient_mrn', patientMrn.trim())
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       xhr.open('POST', `${BASE_URL}/dicom/upload`)
-      xhr.setRequestHeader(
-        'Authorization',
-        `Bearer ${localStorage.getItem('auth_token') ?? ''}`
-      )
+      xhr.setRequestHeader('Authorization', `Bearer ${localStorage.getItem('auth_token') ?? ''}`)
 
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          onProgress?.(Math.round((e.loaded / e.total) * 100))
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          onProgress?.(Math.round((event.loaded / event.total) * 100))
         }
       })
 
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
-            resolve(JSON.parse(xhr.responseText))
+            const response = JSON.parse(xhr.responseText) as BackendUploadResponse
+            resolve({
+              jobId: response.ingestionJobId,
+              studyId: response.studyId,
+              patientId: response.patientId,
+            })
           } catch {
             reject(new Error('Invalid server response'))
           }
-        } else {
-          reject(new Error(`Upload failed: HTTP ${xhr.status}`))
+          return
         }
+        reject(new Error(`Upload failed: HTTP ${xhr.status}`))
       })
 
       xhr.addEventListener('error', () => reject(new Error('Upload failed: network error')))
@@ -306,11 +1317,9 @@ export const studiesApi = {
     })
   },
 
-  /** Get study metadata */
   getMetadata: async (studyId: string): Promise<Record<string, unknown>> =>
-    fetchApi<Record<string, unknown>>(`/dicom/studies/${studyId}/metadata`),
+    fetchApi<Record<string, unknown>>(`/dicom/studies/${studyId}`),
 
-  /** Chunked upload for large files (>100 MB) */
   uploadChunked: async (
     file: File,
     patientMrn: string,
@@ -322,10 +1331,9 @@ export const studiesApi = {
       institutionCode?: string
       caseType?: string
     },
-  ): Promise<{ jobId: string; studyId: string }> => {
-    const CHUNK_SIZE = 10 * 1024 * 1024 // 10 MB — matches backend
+  ): Promise<{ jobId: string; studyId: string; patientId: string }> => {
+    const chunkSize = 10 * 1024 * 1024
 
-    // 1. Init session
     const initForm = new FormData()
     initForm.append('filename', file.name)
     initForm.append('total_size', String(file.size))
@@ -333,75 +1341,72 @@ export const studiesApi = {
     if (opts?.patientAge != null) initForm.append('patient_age', String(opts.patientAge))
     if (opts?.patientSex) initForm.append('patient_sex', opts.patientSex)
     if (opts?.institutionCode) initForm.append('institution_code', opts.institutionCode)
-    if (opts?.caseType) initForm.append('case_type', opts.caseType)
+    if (opts?.caseType) initForm.append('case_type', backendCaseTypeFromFrontend(opts.caseType as CaseType))
 
     const initRes = await fetch(`${BASE_URL}/dicom/upload/init`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}` },
+      headers: authHeaders(false),
       body: initForm,
       signal: opts?.signal,
     })
     if (!initRes.ok) throw new Error(`Init failed: HTTP ${initRes.status}`)
-    const { uploadId, chunkCount } = (await initRes.json()) as {
-      uploadId: string; chunkSize: number; chunkCount: number; totalSize: number
+
+    const initPayload = await initRes.json() as {
+      uploadId: string
+      chunkCount: number
     }
 
-    // 2. Upload chunks with retry
-    const MAX_RETRIES = 3
-    let startTime = Date.now()
-
-    for (let i = 0; i < chunkCount; i++) {
+    const uploadStartedAt = Date.now()
+    for (let chunkIndex = 0; chunkIndex < initPayload.chunkCount; chunkIndex += 1) {
       if (opts?.signal?.aborted) throw new Error('Upload aborted')
 
-      const start = i * CHUNK_SIZE
-      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const start = chunkIndex * chunkSize
+      const end = Math.min(start + chunkSize, file.size)
       const blob = file.slice(start, end)
 
       let attempt = 0
-      let success = false
-      while (!success && attempt < MAX_RETRIES) {
+      while (attempt < 3) {
         try {
           const chunkForm = new FormData()
-          chunkForm.append('chunk', blob, `chunk_${i}`)
-          const chunkRes = await fetch(`${BASE_URL}/dicom/upload/${uploadId}/chunk/${i}`, {
+          chunkForm.append('chunk', blob, `chunk_${chunkIndex}`)
+          const chunkRes = await fetch(`${BASE_URL}/dicom/upload/${initPayload.uploadId}/chunk/${chunkIndex}`, {
             method: 'PUT',
-            headers: { Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}` },
+            headers: authHeaders(false),
             body: chunkForm,
             signal: opts?.signal,
           })
-          if (!chunkRes.ok) throw new Error(`Chunk ${i} failed: HTTP ${chunkRes.status}`)
-          success = true
-        } catch (err) {
-          attempt++
-          if (attempt >= MAX_RETRIES) throw err
-          await new Promise(r => setTimeout(r, 1000 * attempt))
+          if (!chunkRes.ok) throw new Error(`Chunk ${chunkIndex} failed: HTTP ${chunkRes.status}`)
+          break
+        } catch (error) {
+          attempt += 1
+          if (attempt >= 3) throw error
+          await new Promise((resolve) => window.setTimeout(resolve, 1000 * attempt))
         }
       }
 
-      // Progress callback
-      const elapsed = (Date.now() - startTime) / 1000
+      const elapsedSeconds = (Date.now() - uploadStartedAt) / 1000
       const bytesUploaded = end
-      const speedBps = elapsed > 0 ? bytesUploaded / elapsed : 0
+      const speedBps = elapsedSeconds > 0 ? bytesUploaded / elapsedSeconds : 0
       const remaining = file.size - bytesUploaded
       const etaSec = speedBps > 0 ? remaining / speedBps : 0
-      opts?.onProgress?.(i + 1, chunkCount, speedBps, etaSec)
+      opts?.onProgress?.(chunkIndex + 1, initPayload.chunkCount, speedBps, etaSec)
     }
 
-    // 3. Complete
-    const completeRes = await fetch(`${BASE_URL}/dicom/upload/${uploadId}/complete`, {
+    const completeRes = await fetch(`${BASE_URL}/dicom/upload/${initPayload.uploadId}/complete`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders(false),
       signal: opts?.signal,
     })
     if (!completeRes.ok) throw new Error(`Complete failed: HTTP ${completeRes.status}`)
-    const result = await completeRes.json()
-    return { jobId: result.ingestionJobId, studyId: result.studyId }
+
+    const result = await completeRes.json() as BackendUploadResponse
+    return {
+      jobId: result.ingestionJobId,
+      studyId: result.studyId,
+      patientId: result.patientId,
+    }
   },
 
-  /** Get chunked upload status (for resume) */
   getUploadStatus: async (uploadId: string) =>
     fetchApi<{
       uploadId: string
@@ -415,68 +1420,96 @@ export const studiesApi = {
 }
 
 // ---------------------------
-// Case Studies API (multi-study per case)
+// Case Studies API
 // ---------------------------
 
 export const caseStudiesApi = {
-  /** List all studies attached to a case */
   list: async (caseId: string): Promise<CaseStudyInfo[]> =>
-    fetchApi<CaseStudyInfo[]>(`/cases/${caseId}/studies`),
+    (await fetchApi<BackendCaseStudyInfo[]>(`/cases/${caseId}/studies`)).map(mapCaseStudy),
 
-  /** Attach a study to a case */
   attach: async (
     caseId: string,
     data: { studyId: string; studyRole?: string; studyLabel?: string; isPrimary?: boolean }
   ): Promise<CaseStudyInfo> =>
-    fetchApi<CaseStudyInfo>(`/cases/${caseId}/studies`, { method: 'POST', body: data }),
+    mapCaseStudy(
+      await fetchApi<BackendCaseStudyInfo>(`/cases/${caseId}/studies`, {
+        method: 'POST',
+        body: data,
+      })
+    ),
 
-  /** Detach a study from a case */
   detach: async (caseId: string, studyId: string): Promise<void> =>
     fetchApi<void>(`/cases/${caseId}/studies/${studyId}`, { method: 'DELETE' }),
 
-  /** Update role/label/primary for a case-study link */
   update: async (
     caseId: string,
     studyId: string,
     data: { studyRole?: string; studyLabel?: string; isPrimary?: boolean }
   ): Promise<CaseStudyInfo> =>
-    fetchApi<CaseStudyInfo>(`/cases/${caseId}/studies/${studyId}`, { method: 'PATCH', body: data }),
+    mapCaseStudy(
+      await fetchApi<BackendCaseStudyInfo>(`/cases/${caseId}/studies/${studyId}`, {
+        method: 'PATCH',
+        body: data,
+      })
+    ),
+}
 
 // ---------------------------
 // Segmentation API
 // ---------------------------
 
 export const segmentationApi = {
-  /** Get the latest segmentation result for a case */
   getResult: async (caseId: string): Promise<SegmentationResult> => {
-    const results = await fetchApi<SegmentationResult[]>(`/segmentation/cases/${caseId}`)
-    if (results.length > 0) return results[results.length - 1]
-    throw new Error('No segmentation results found')
+    const results = await fetchApi<BackendSegmentationResult[]>(`/segmentation/cases/${caseId}`)
+    if (!results.length) {
+      throw new Error('No segmentation results found')
+    }
+    return mapSegmentationResult(results[0])
   },
 
-  /** Submit a new segmentation job */
-  submitJob: async (
-    caseId: string
-  ): Promise<{ jobId: string; segmentationId: string }> =>
-    fetchApi('/segmentation', { method: 'POST', body: { caseId } }),
+  submitJob: async (caseId: string): Promise<{ jobId: string; segmentationId: string }> => {
+    const response = await fetchApi<{ jobId: string; segmentationId: string }>('/segmentation', {
+      method: 'POST',
+      body: {
+        caseId,
+        modelName: 'totalsegmentator',
+        identifyFragments: true,
+        runDentalSegmentation: false,
+        fastMode: false,
+      },
+    })
+    return response
+  },
 
-  /** Get job status by ID */
   getJobStatus: async (
     jobId: string
-  ): Promise<{ status: string; progress: number; currentStep?: string }> =>
-    fetchApi(`/jobs/${jobId}`),
+  ): Promise<{ status: string; progress: number; currentStep?: string }> => {
+    const response = await fetchApi<BackendJobStatusResponse>(`/jobs/${jobId}`)
+    return {
+      status: response.status,
+      progress: safeNumber(response.progress?.percent),
+      currentStep: response.progress?.currentStep ?? undefined,
+    }
+  },
 
-  /** Approve a segmentation structure */
-  approveStructure: async (caseId: string, label: string): Promise<void> =>
-    fetchApi(`/segmentation/${caseId}/structures/${label}/approve`, { method: 'POST' }),
+  approveStructure: async (caseId: string, label: string): Promise<void> => {
+    const segmentationId = await getLatestSegmentationId(caseId)
+    await fetchApi(`/segmentation/${segmentationId}/structures/${label}/approve`, { method: 'POST' })
+  },
 
-  /** Reject a segmentation structure */
-  rejectStructure: async (caseId: string, label: string): Promise<void> =>
-    fetchApi(`/segmentation/${caseId}/structures/${label}/reject`, { method: 'POST' }),
+  rejectStructure: async (caseId: string, label: string): Promise<void> => {
+    const segmentationId = await getLatestSegmentationId(caseId)
+    await fetchApi(`/segmentation/${segmentationId}/structures/${label}/reject`, { method: 'POST' })
+  },
 
-  /** Request re-segmentation for a specific structure */
-  requestResegmentation: async (caseId: string, label: string): Promise<{ jobId: string }> =>
-    fetchApi(`/segmentation/${caseId}/structures/${label}/resegment`, { method: 'POST' }),
+  requestResegmentation: async (caseId: string, label: string): Promise<{ jobId: string }> => {
+    const segmentationId = await getLatestSegmentationId(caseId)
+    const response = await fetchApi<{ jobId: string }>(
+      `/segmentation/${segmentationId}/structures/${label}/resegment`,
+      { method: 'POST' }
+    )
+    return response
+  },
 }
 
 // ---------------------------
@@ -484,76 +1517,95 @@ export const segmentationApi = {
 // ---------------------------
 
 export const planningApi = {
-  /** Get a reduction plan by ID */
   getPlan: async (planId: string): Promise<ReductionPlan> =>
-    fetchApi<ReductionPlan>(`/planning/${planId}`),
+    mapPlanResponse(await fetchApi<BackendReductionPlanResponse>(`/planning/${planId}`)),
 
-  /** Generate a new reduction plan */
   generatePlan: async (
     caseId: string
-  ): Promise<{ jobId: string; planId: string }> =>
-    fetchApi('/planning', { method: 'POST', body: { caseId } }),
+  ): Promise<{ jobId: string; planId?: string }> => {
+    const segmentationId = await getLatestSegmentationId(caseId)
+    const response = await fetchApi<{ jobId: string; result?: { planId?: string } }>(
+      '/planning',
+      {
+        method: 'POST',
+        body: {
+          caseId,
+          segmentationId,
+          modelName: 'baseline_icp',
+          useIntactReference: true,
+          includeAlternativePlans: false,
+        },
+      }
+    )
 
-  /** Update fragment transform (surgeon manual edit) */
+    return {
+      jobId: response.jobId,
+      planId: response.result?.planId,
+    }
+  },
+
   updateFragmentTransform: async (
     planId: string,
     fragmentId: string,
-    transform: unknown
+    transform: UiTransform3D
   ): Promise<ReductionPlan> =>
-    fetchApi<ReductionPlan>(`/planning/${planId}/surgeon-edit`, {
-      method: 'POST',
-      body: { fragmentId, transform, editType: 'manual_adjustment' },
-    }),
+    mapPlanResponse(
+      await fetchApi<BackendReductionPlanResponse>(`/planning/${planId}/surgeon-edit`, {
+        method: 'POST',
+        body: {
+          fragmentId,
+          newTransform: backendTransformFromFrontend(transform),
+          notes: 'Manual adjustment from planning workspace',
+          reOptimize: false,
+        },
+      })
+    ),
 
-  /** Accept AI-suggested transform for a fragment */
   acceptAiSuggestion: async (
     planId: string,
     fragmentId: string
-  ): Promise<ReductionPlan> =>
-    fetchApi<ReductionPlan>(`/planning/${planId}/surgeon-edit`, {
-      method: 'POST',
-      body: { fragmentId, editType: 'accept_ai_suggestion' },
-    }),
+  ): Promise<ReductionPlan> => {
+    const suggestedTransform = await getFragmentTransformForAction(planId, fragmentId, 'suggested')
+    return planningApi.updateFragmentTransform(planId, fragmentId, suggestedTransform)
+  },
 
-  /** Reset a fragment to its base transform */
   resetFragment: async (
     planId: string,
     fragmentId: string
-  ): Promise<ReductionPlan> =>
-    fetchApi<ReductionPlan>(`/planning/${planId}/surgeon-edit`, {
-      method: 'POST',
-      body: { fragmentId, editType: 'reset_to_base' },
-    }),
+  ): Promise<ReductionPlan> => {
+    const baseTransform = await getFragmentTransformForAction(planId, fragmentId, 'base')
+    return planningApi.updateFragmentTransform(planId, fragmentId, baseTransform)
+  },
 
-  /** List all plan versions for a case */
   listVersions: async (caseId: string): Promise<ReductionPlan[]> =>
-    fetchApi<ReductionPlan[]>(`/planning/cases/${caseId}`),
+    (await fetchApi<BackendReductionPlanResponse[]>(`/planning/cases/${caseId}`)).map(mapPlanResponse),
 
-  /** Override an occlusal metric and re-optimize */
   overrideMetric: async (
     planId: string,
     metricName: string,
     targetValue: number,
     notes?: string
   ): Promise<ReductionPlan> =>
-    fetchApi<ReductionPlan>(`/planning/${planId}/metric-override`, {
-      method: 'POST',
-      body: { metric_name: metricName, target_value: targetValue, notes },
-    }),
+    mapPlanResponse(
+      await fetchApi<BackendReductionPlanResponse>(`/planning/${planId}/metric-override`, {
+        method: 'POST',
+        body: { metricName, targetValue, notes },
+      })
+    ),
 
-  /** Export splint design as STL blob */
-  exportSplint: async (planId: string, exportType: string): Promise<Blob> =>
-    fetch(`${BASE_URL}/planning/${planId}/export`, {
+  exportSplint: async (planId: string, exportType: string): Promise<Blob> => {
+    const response = await fetch(`${BASE_URL}/planning/${planId}/export`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
+        ...authHeaders(true),
       },
-      body: JSON.stringify({ export_type: exportType }),
-    }).then(res => {
-      if (!res.ok) throw new Error(`Export failed: ${res.status}`)
-      return res.blob()
-    }),
+      body: JSON.stringify({ exportType }),
+    })
+    if (!response.ok) {
+      throw new Error(`Export failed: HTTP ${response.status}`)
+    }
+    return response.blob()
+  },
 }
 
 // ---------------------------
@@ -579,7 +1631,6 @@ export interface ExportResponse {
 }
 
 export const exportApi = {
-  /** Trigger STL export for a plan */
   exportPlan: async (
     planId: string,
     exportType = 'full_assembly',
@@ -591,24 +1642,23 @@ export const exportApi = {
       body: { exportType, stlFormat, structureName },
     }),
 
-  /** Download an exported STL file via authenticated fetch + blob */
   downloadStl: async (planId: string, filename: string): Promise<void> => {
-    const url = `${BASE_URL}/planning/${planId}/export/${filename}`
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('auth_token') ?? ''}`,
-      },
+    const response = await fetch(`${BASE_URL}/planning/${planId}/export/${filename}`, {
+      headers: authHeaders(false),
     })
-    if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`)
-    const blob = await res.blob()
-    const objUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objUrl
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(objUrl)
+    if (!response.ok) {
+      throw new Error(`Download failed: HTTP ${response.status}`)
+    }
+
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(objectUrl)
   },
 }
 
@@ -617,42 +1667,49 @@ export const exportApi = {
 // ---------------------------
 
 export const reviewApi = {
-  /** Get surgeon review for a case */
   getReview: async (caseId: string): Promise<SurgeonReview> =>
-    fetchApi<SurgeonReview>(`/reviews/${caseId}`),
+    mapReviewResponse(await fetchApi<BackendReviewResponse>(`/reviews/${caseId}`)),
 
-  /** Update a checklist item */
   updateChecklist: async (
     reviewId: string,
     checklistId: string,
     passed: boolean
   ): Promise<SurgeonReview> =>
-    fetchApi<SurgeonReview>(`/reviews/${reviewId}/checklist`, {
-      method: 'PATCH',
-      body: { checklistId, passed },
-    }),
+    mapReviewResponse(
+      await fetchApi<BackendReviewResponse>(`/reviews/${reviewId}/checklist`, {
+        method: 'PATCH',
+        body: { checklistId, passed },
+      })
+    ),
 
-  /** Approve a review */
-  approve: async (reviewId: string, notes: string): Promise<SurgeonReview> =>
-    fetchApi<SurgeonReview>(`/reviews/${reviewId}/approve`, {
-      method: 'POST',
-      body: { notes },
-    }),
+  approve: async (
+    reviewId: string,
+    notes: string,
+    signature?: string
+  ): Promise<SurgeonReview> =>
+    mapReviewResponse(
+      await fetchApi<BackendReviewResponse>(`/reviews/${reviewId}/approve`, {
+        method: 'POST',
+        body: { notes, signature },
+      })
+    ),
 
-  /** Request revision */
   requestRevision: async (
     reviewId: string,
     notes: string
   ): Promise<SurgeonReview> =>
-    fetchApi<SurgeonReview>(`/reviews/${reviewId}/revision`, {
-      method: 'POST',
-      body: { notes },
-    }),
+    mapReviewResponse(
+      await fetchApi<BackendReviewResponse>(`/reviews/${reviewId}/revision`, {
+        method: 'POST',
+        body: { notes },
+      })
+    ),
 
-  /** Reject a review */
   reject: async (reviewId: string, notes: string): Promise<SurgeonReview> =>
-    fetchApi<SurgeonReview>(`/reviews/${reviewId}/reject`, {
-      method: 'POST',
-      body: { notes },
-    }),
+    mapReviewResponse(
+      await fetchApi<BackendReviewResponse>(`/reviews/${reviewId}/reject`, {
+        method: 'POST',
+        body: { notes },
+      })
+    ),
 }

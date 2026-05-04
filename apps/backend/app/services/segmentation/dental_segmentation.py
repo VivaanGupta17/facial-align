@@ -162,15 +162,8 @@ class DentalSegmentationService:
         import time
 
         with TimedOperation(logger, "dental_segmentation", arch=arch):
-            # Attempt to load model (may raise ModelLoadError if not trained)
-            try:
-                self._load_model()
-            except (ModelLoadError, ModelNotAvailableError):
-                logger.warning(
-                    "dental_model_unavailable",
-                    note="Using placeholder output — model not yet trained",
-                )
-                return self._create_placeholder_output(volume, spacing)
+            # Attempt to load model; unavailable models must surface explicitly.
+            self._load_model()
 
             start_time = time.perf_counter()
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
-from typing import Set
+from typing import Optional, Set
 
-from sqlalchemy import String, Text, text
+from sqlalchemy import ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -57,32 +57,40 @@ class SurgicalCase(Base):
         default=lambda: str(uuid.uuid4()),
     )
     case_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-    patient_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
-    study_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    patient_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("patients.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    study_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("imaging_studies.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     case_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), server_default=text("'CREATED'"), nullable=False
     )
-    diagnosis_codes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    fracture_classification: Mapped[str | None] = mapped_column(
+    diagnosis_codes: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    fracture_classification: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True
     )
-    clinical_notes_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    planned_procedure: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    target_surgery_date: Mapped[datetime | None] = mapped_column(nullable=True)
-    current_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    surgeon_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    reviewer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    team_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    clinical_notes_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    planned_procedure: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    target_surgery_date: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    current_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    surgeon_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reviewer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    team_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    created_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
-    approved_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
 
     # Relationships
     patient = relationship("Patient", back_populates="surgical_cases")

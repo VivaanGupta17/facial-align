@@ -18,6 +18,8 @@ from app.core.logging import get_logger
 from app.core.security import CurrentUser, audit_logger, get_current_user, require_surgeon
 from app.db.database import get_db_session
 from app.models.case import SurgicalCase
+from app.models.plan import ReductionPlan
+from app.models.review import PlanReview
 from app.schemas.common import BaseSchema
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
@@ -42,14 +44,14 @@ DEFAULT_CHECKLIST = [
 
 
 class ReviewResponse(BaseSchema):
-    id: str
-    case_id: str
-    plan_id: str = ""
+    id: uuid.UUID
+    case_id: uuid.UUID
+    plan_id: Optional[uuid.UUID] = None
     reviewer_id: str = ""
     reviewer_name: str = "Current Surgeon"
     decision: str = "pending"
     notes: str = ""
-    checklist: list = Field(default_factory=list)
+    checklist: list[dict] = Field(default_factory=list)
     signed_at: Optional[str] = None
     signature: Optional[str] = None
     created_at: str = ""
@@ -66,28 +68,84 @@ class ReviewActionRequest(BaseSchema):
     signature: Optional[str] = None
 
 
-# ---------- In-memory review store (replaced by DB table in production) ----------
-# Uses the case's JSONB or a dedicated table; for now, keep in-memory for simplicity
-_review_store: dict[str, dict] = {}
+def _review_to_response(review: PlanReview) -> ReviewResponse:
+    return ReviewResponse(
+        id=review.id,
+        case_id=review.case_id,
+        plan_id=review.plan_id,
+        reviewer_id=review.reviewer_id or "",
+        reviewer_name=review.reviewer_name or "Current Surgeon",
+        decision=review.decision,
+        notes=review.notes,
+        checklist=list(review.checklist or []),
+        signed_at=review.signed_at.isoformat() if review.signed_at else None,
+        signature=review.signature,
+        created_at=review.created_at.isoformat(),
+        updated_at=review.updated_at.isoformat(),
+    )
 
 
-def _get_or_create_review(case_id: str) -> dict:
-    if case_id not in _review_store:
-        _review_store[case_id] = {
-            "id": f"review-{case_id}",
-            "case_id": case_id,
-            "plan_id": "",
-            "reviewer_id": "",
-            "reviewer_name": "Current Surgeon",
-            "decision": "pending",
-            "notes": "",
-            "checklist": [dict(item) for item in DEFAULT_CHECKLIST],
-            "signed_at": None,
-            "signature": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    return _review_store[case_id]
+async def _get_case_or_404(case_id: str, db: AsyncSession) -> SurgicalCase:
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+    return case
+
+
+async def _get_latest_plan_id(case_id: str, db: AsyncSession) -> Optional[str]:
+    latest_plan = (
+        await db.execute(
+            select(ReductionPlan)
+            .where(ReductionPlan.case_id == case_id)
+            .order_by(ReductionPlan.plan_version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return str(latest_plan.id) if latest_plan else None
+
+
+async def _get_or_create_review(
+    case_id: str,
+    current_user: CurrentUser,
+    db: AsyncSession,
+) -> PlanReview:
+    review = (
+        await db.execute(select(PlanReview).where(PlanReview.case_id == case_id))
+    ).scalar_one_or_none()
+    latest_plan_id = await _get_latest_plan_id(case_id, db)
+
+    if review is None:
+        review = PlanReview(
+            case_id=case_id,
+            plan_id=latest_plan_id,
+            reviewer_id=current_user.user_id,
+            reviewer_name=current_user.user_id,
+            decision="pending",
+            notes="",
+            checklist=[dict(item) for item in DEFAULT_CHECKLIST],
+        )
+        db.add(review)
+        await db.flush()
+        return review
+
+    review.reviewer_id = current_user.user_id
+    review.reviewer_name = review.reviewer_name or current_user.user_id
+    if latest_plan_id and review.plan_id is None:
+        review.plan_id = latest_plan_id
+    review.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    return review
+
+
+async def _get_review_by_id(review_id: str, db: AsyncSession) -> PlanReview:
+    review = (
+        await db.execute(select(PlanReview).where(PlanReview.id == review_id))
+    ).scalar_one_or_none()
+    if not review:
+        raise HTTPException(status_code=404, detail=f"Review {review_id} not found")
+    return review
 
 
 # ---------- Endpoints ----------
@@ -100,12 +158,13 @@ def _get_or_create_review(case_id: str) -> dict:
 )
 async def get_review(
     case_id: str,
+    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> ReviewResponse:
-    """Return the active review for a case. Creates a default review with checklist if none exists."""
-    review = _get_or_create_review(case_id)
-    review["reviewer_id"] = current_user.user_id
-    return ReviewResponse(**review)
+    """Return the active persistent review for a case."""
+    await _get_case_or_404(case_id, db)
+    review = await _get_or_create_review(case_id, current_user, db)
+    return _review_to_response(review)
 
 
 @router.patch(
@@ -116,25 +175,25 @@ async def get_review(
 async def update_checklist(
     review_id: str,
     payload: ChecklistUpdateRequest,
+    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(require_surgeon),
 ) -> ReviewResponse:
     """Toggle a checklist item's passed status."""
-    # Find review by ID
-    review = None
-    for r in _review_store.values():
-        if r["id"] == review_id:
-            review = r
-            break
-    if not review:
-        raise HTTPException(status_code=404, detail=f"Review {review_id} not found")
+    review = await _get_review_by_id(review_id, db)
+    checklist = [dict(item) for item in review.checklist or []]
 
-    for item in review["checklist"]:
+    for item in checklist:
         if item["id"] == payload.checklist_id:
             item["passed"] = payload.passed
+            item["reviewed_by"] = current_user.user_id
+            item["reviewed_at"] = datetime.now(timezone.utc).isoformat()
             break
 
-    review["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return ReviewResponse(**review)
+    review.checklist = checklist
+    review.reviewer_id = current_user.user_id
+    review.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    return _review_to_response(review)
 
 
 @router.post(
@@ -145,29 +204,38 @@ async def update_checklist(
 async def approve_review(
     review_id: str,
     payload: ReviewActionRequest,
+    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(require_surgeon),
 ) -> ReviewResponse:
     """Approve the plan with optional notes and digital signature."""
-    review = None
-    for r in _review_store.values():
-        if r["id"] == review_id:
-            review = r
-            break
-    if not review:
-        raise HTTPException(status_code=404, detail=f"Review {review_id} not found")
+    review = await _get_review_by_id(review_id, db)
 
-    review["decision"] = "approved"
-    review["notes"] = payload.notes
-    review["signed_at"] = datetime.now(timezone.utc).isoformat()
-    review["reviewer_id"] = current_user.user_id
+    review.decision = "approved"
+    review.notes = payload.notes
+    review.signed_at = datetime.now(timezone.utc)
+    review.reviewer_id = current_user.user_id
+    review.reviewer_name = review.reviewer_name or current_user.user_id
     if payload.signature:
-        review["signature"] = payload.signature
-    review["updated_at"] = datetime.now(timezone.utc).isoformat()
+        review.signature = payload.signature
+    review.updated_at = datetime.now(timezone.utc)
+
+    if review.plan_id:
+        plan = (
+            await db.execute(select(ReductionPlan).where(ReductionPlan.id == review.plan_id))
+        ).scalar_one_or_none()
+        if plan:
+            plan.surgeon_approved = True
+            plan.approved_at = review.signed_at
+            plan.approved_by = current_user.user_id
+            plan.status = "approved"
+
+    case = await _get_case_or_404(str(review.case_id), db)
+    case.reviewer_id = current_user.user_id
 
     logger.info(
         "review_approved",
         review_id=review_id,
-        case_id=review["case_id"],
+        case_id=str(review.case_id),
         user_id=current_user.user_id,
     )
 
@@ -179,7 +247,8 @@ async def approve_review(
         ip_address="unknown",
     )
 
-    return ReviewResponse(**review)
+    await db.flush()
+    return _review_to_response(review)
 
 
 @router.post(
@@ -190,29 +259,25 @@ async def approve_review(
 async def request_revision(
     review_id: str,
     payload: ReviewActionRequest,
+    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(require_surgeon),
 ) -> ReviewResponse:
     """Request revision of the surgical plan."""
-    review = None
-    for r in _review_store.values():
-        if r["id"] == review_id:
-            review = r
-            break
-    if not review:
-        raise HTTPException(status_code=404, detail=f"Review {review_id} not found")
-
-    review["decision"] = "revision_requested"
-    review["notes"] = payload.notes
-    review["reviewer_id"] = current_user.user_id
-    review["updated_at"] = datetime.now(timezone.utc).isoformat()
+    review = await _get_review_by_id(review_id, db)
+    review.decision = "revision_requested"
+    review.notes = payload.notes
+    review.reviewer_id = current_user.user_id
+    review.reviewer_name = review.reviewer_name or current_user.user_id
+    review.updated_at = datetime.now(timezone.utc)
 
     logger.info(
         "revision_requested",
         review_id=review_id,
-        case_id=review["case_id"],
+        case_id=str(review.case_id),
         user_id=current_user.user_id,
     )
-    return ReviewResponse(**review)
+    await db.flush()
+    return _review_to_response(review)
 
 
 @router.post(
@@ -223,26 +288,22 @@ async def request_revision(
 async def reject_review(
     review_id: str,
     payload: ReviewActionRequest,
+    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(require_surgeon),
 ) -> ReviewResponse:
     """Reject the surgical plan."""
-    review = None
-    for r in _review_store.values():
-        if r["id"] == review_id:
-            review = r
-            break
-    if not review:
-        raise HTTPException(status_code=404, detail=f"Review {review_id} not found")
-
-    review["decision"] = "rejected"
-    review["notes"] = payload.notes
-    review["reviewer_id"] = current_user.user_id
-    review["updated_at"] = datetime.now(timezone.utc).isoformat()
+    review = await _get_review_by_id(review_id, db)
+    review.decision = "rejected"
+    review.notes = payload.notes
+    review.reviewer_id = current_user.user_id
+    review.reviewer_name = review.reviewer_name or current_user.user_id
+    review.updated_at = datetime.now(timezone.utc)
 
     logger.info(
         "review_rejected",
         review_id=review_id,
-        case_id=review["case_id"],
+        case_id=str(review.case_id),
         user_id=current_user.user_id,
     )
-    return ReviewResponse(**review)
+    await db.flush()
+    return _review_to_response(review)

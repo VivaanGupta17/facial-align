@@ -12,6 +12,7 @@ import numpy as np
 
 from app.core.config import get_settings
 from app.core.logging import TimedOperation, get_logger
+from app.services.capabilities import build_provenance
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -102,6 +103,7 @@ class SegmentationPipeline:
 
         # ── Dental segmentation ──
         dental_output = None
+        provenance_warnings: list[str] = []
         if self._run_dental:
             self._progress(60, "Running dental segmentation")
             from app.services.segmentation.dental_segmentation import DentalSegmentationService
@@ -116,14 +118,26 @@ class SegmentationPipeline:
                     teeth_found=len(dental_output.present_teeth),
                 )
             except Exception as exc:
-                logger.warning("dental_segmentation_failed", error=str(exc))
+                warning = (
+                    "Dental segmentation beta path is unavailable for this case; "
+                    "continuing without dental outputs."
+                )
+                provenance_warnings.append(warning)
+                logger.warning("dental_segmentation_failed", error=str(exc), note=warning)
 
         # ── Fragment identification ──
         fragment_count = None
         fragment_mask_path = None
+        fracture_fragments: dict[str, Any] | None = None
+        fragment_mesh_paths: dict[str, Any] | None = None
         if self._identify_fragments and len(seg_output.labels) > 0:
             self._progress(70, "Identifying fracture fragments")
-            fragment_count, fragment_mask_path = await self._identify_fragments_from_masks(
+            (
+                fragment_count,
+                fragment_mask_path,
+                fracture_fragments,
+                fragment_mesh_paths,
+            ) = await self._identify_fragments_from_masks(
                 seg_output, volume, spacing
             )
 
@@ -181,6 +195,9 @@ class SegmentationPipeline:
             dental_mesh_paths=dental_mesh_paths,
             fragment_count=fragment_count,
             fragment_mask_path=fragment_mask_path,
+            fracture_fragments=fracture_fragments,
+            fragment_mesh_paths=fragment_mesh_paths,
+            provenance_warnings=provenance_warnings,
             completed_at=now,
         )
 
@@ -259,8 +276,11 @@ class SegmentationPipeline:
         """Identify individual bone fragments using connected component analysis."""
         try:
             from scipy import ndimage
+            from app.services.mesh.mesh_service import MeshService
+
             fragment_masks = np.zeros_like(seg_output.masks, dtype=np.int32)
             total_fragments = 0
+            fragment_definitions: dict[str, Any] = {}
 
             # Apply connected component analysis to each structure
             for struct_name, label_val in seg_output.labels.items():
@@ -273,26 +293,67 @@ class SegmentationPipeline:
                         structure=struct_name,
                         n_fragments=n_components,
                     )
-                    fragment_masks[labeled > 0] = labeled + total_fragments
-                    total_fragments += n_components
-                else:
-                    fragment_masks[struct_mask > 0] = total_fragments + 1
+
+                for component_index in range(1, n_components + 1):
+                    component_mask = labeled == component_index
+                    if not np.any(component_mask):
+                        continue
+
                     total_fragments += 1
+                    fragment_label = total_fragments
+                    fragment_id = f"fragment_{fragment_label:03d}"
+                    fragment_masks[component_mask] = fragment_label
+
+                    coords = np.argwhere(component_mask)
+                    voxel_count = int(coords.shape[0])
+                    centroid_mm = [
+                        float(np.mean(coords[:, 2]) * spacing[0]),
+                        float(np.mean(coords[:, 1]) * spacing[1]),
+                        float(np.mean(coords[:, 0]) * spacing[2]),
+                    ]
+                    fragment_definitions[fragment_id] = {
+                        "fragment_id": fragment_id,
+                        "label_value": fragment_label,
+                        "parent_structure": struct_name,
+                        "component_index": component_index,
+                        "voxel_count": voxel_count,
+                        "volume_mm3": float(voxel_count * spacing[0] * spacing[1] * spacing[2]),
+                        "centroid_mm": centroid_mm,
+                        "is_reference_fragment": struct_name in {"skull_base", "frontal_bone"},
+                    }
 
             # Save fragment mask
             if total_fragments > 0:
                 import SimpleITK as sitk
                 mask_dir = settings.storage.mask_path / self._case_id / self._seg_id
+                mask_dir.mkdir(parents=True, exist_ok=True)
                 frag_path = mask_dir / "fragments.nii.gz"
                 frag_image = sitk.GetImageFromArray(fragment_masks)
                 frag_image.SetSpacing(spacing)
                 sitk.WriteImage(frag_image, str(frag_path))
-                return total_fragments, str(frag_path)
+
+                mesh_service = MeshService()
+                fragment_output_dir = settings.storage.mesh_path / self._case_id / self._seg_id / "fragments"
+                fragment_label_map = {
+                    fragment_id: info["label_value"]
+                    for fragment_id, info in fragment_definitions.items()
+                }
+                fragment_meshes = mesh_service.extract_and_process_all_structures(
+                    masks=fragment_masks,
+                    labels=fragment_label_map,
+                    spacing=spacing,
+                    output_dir=fragment_output_dir,
+                )
+                fragment_mesh_paths = {
+                    fragment_id: {fmt: str(path) for fmt, path in paths.items()}
+                    for fragment_id, paths in fragment_meshes.items()
+                }
+                return total_fragments, str(frag_path), fragment_definitions, fragment_mesh_paths
 
         except Exception as exc:
             logger.warning("fragment_identification_failed", error=str(exc))
 
-        return None, None
+        return None, None, None, None
 
     async def _update_segmentation_record(
         self,
@@ -302,17 +363,44 @@ class SegmentationPipeline:
         dental_mesh_paths: Dict[str, Any],
         fragment_count: Optional[int],
         fragment_mask_path: Optional[str],
+        fracture_fragments: Optional[Dict[str, Any]],
+        fragment_mesh_paths: Optional[Dict[str, Any]],
+        provenance_warnings: List[str],
         completed_at,
     ) -> None:
         """Update SegmentationResult record with pipeline results."""
         from app.db.database import get_db_context
         from app.models.segmentation import SegmentationResult
-        from sqlalchemy import update
+        from sqlalchemy import select, update
 
         overall_confidence = float(np.mean(list(seg_output.confidences.values()))) \
             if seg_output.confidences else None
 
         async with get_db_context() as db:
+            row = (
+                await db.execute(
+                    select(SegmentationResult).where(SegmentationResult.id == self._seg_id)
+                )
+            ).scalar_one_or_none()
+            existing_provenance = dict(row.provenance or {}) if row else {}
+            warnings = list(existing_provenance.get("warnings", []))
+            warnings.extend(provenance_warnings)
+            validation_tier = existing_provenance.get(
+                "validation_tier",
+                "deterministic_baseline" if self._model_name == "totalsegmentator" else "learned_beta",
+            )
+            beta_status = existing_provenance.get(
+                "beta_status",
+                "not_beta" if self._model_name == "totalsegmentator" else "beta_available",
+            )
+            provenance = build_provenance(
+                algorithm_used=self._model_name,
+                validation_tier=validation_tier,
+                beta_status=beta_status,
+                warnings=warnings,
+                fallback_reason=existing_provenance.get("fallback_reason"),
+                model_version=seg_output.model_version,
+            )
             await db.execute(
                 update(SegmentationResult)
                 .where(SegmentationResult.id == self._seg_id)
@@ -323,11 +411,14 @@ class SegmentationPipeline:
                     mesh_storage_paths=mesh_storage_paths,
                     confidence_scores=seg_output.confidences,
                     overall_confidence=overall_confidence,
+                    provenance=provenance,
                     inference_time_ms=seg_output.inference_time_ms,
                     volume_stats=seg_output.volume_stats,
                     dental_mesh_paths=dental_mesh_paths or None,
                     fragment_count=fragment_count,
                     fragment_masks_path=fragment_mask_path,
+                    fracture_fragments=fracture_fragments,
+                    fragment_mesh_paths=fragment_mesh_paths,
                     status="complete",
                     completed_at=completed_at,
                 )
