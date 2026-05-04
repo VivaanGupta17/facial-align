@@ -28,6 +28,63 @@ logger = get_logger(__name__)
 inference_logger = MLInferenceLogger(logger)
 
 
+def _label_connected_components(mask: np.ndarray) -> Tuple[np.ndarray, int]:
+    """
+    Label connected foreground components in a binary mask.
+
+    Prefer `scipy.ndimage.label` when available, but fall back to a pure NumPy
+    6-connected implementation so post-processing still works in lightweight
+    environments.
+    """
+    try:
+        from scipy import ndimage
+
+        return ndimage.label(mask)
+    except ImportError:
+        binary_mask = np.asarray(mask).astype(bool)
+        labeled = np.zeros(binary_mask.shape, dtype=np.int32)
+        foreground = {tuple(coord) for coord in np.argwhere(binary_mask)}
+        if not foreground:
+            return labeled, 0
+
+        neighbors = (
+            (1, 0, 0),
+            (-1, 0, 0),
+            (0, 1, 0),
+            (0, -1, 0),
+            (0, 0, 1),
+            (0, 0, -1),
+        )
+
+        component_id = 0
+        while foreground:
+            component_id += 1
+            seed = foreground.pop()
+            stack = [seed]
+            labeled[seed] = component_id
+
+            while stack:
+                z, y, x = stack.pop()
+                for dz, dy, dx in neighbors:
+                    neighbor = (z + dz, y + dy, x + dx)
+                    if neighbor in foreground:
+                        foreground.remove(neighbor)
+                        labeled[neighbor] = component_id
+                        stack.append(neighbor)
+
+        return labeled, component_id
+
+
+def _component_sizes(labeled_components: np.ndarray, n_components: int) -> np.ndarray:
+    """Return per-component voxel counts for 1..n_components."""
+    if n_components <= 0:
+        return np.array([], dtype=np.int32)
+    return np.array(
+        [int(np.count_nonzero(labeled_components == idx)) for idx in range(1, n_components + 1)],
+        dtype=np.int32,
+    )
+
+
 # ─── Output dataclass ─────────────────────────────────────────────────────────
 
 
@@ -368,11 +425,6 @@ class TotalSegmentatorAdapter(BaseSegmentationModel):
         Heuristic confidence estimation for TotalSegmentator output.
         Uses connected component analysis to penalize fragmented masks.
         """
-        try:
-            from scipy import ndimage
-        except ImportError:
-            return {name: 0.85 for name in labels}  # Default confidence
-
         confidences: Dict[str, float] = {}
         for structure_name, label_val in labels.items():
             struct_mask = (masks == label_val).astype(np.uint8)
@@ -382,7 +434,7 @@ class TotalSegmentatorAdapter(BaseSegmentationModel):
                 continue
 
             # Count connected components — more components = lower confidence
-            labeled, n_components = ndimage.label(struct_mask)
+            labeled, n_components = _label_connected_components(struct_mask)
             if n_components == 1:
                 confidence = 0.92
             elif n_components <= 3:
@@ -757,11 +809,6 @@ class SegmentationService:
         - Fill small holes in structures
         - Remove labels with no voxels
         """
-        try:
-            from scipy import ndimage
-        except ImportError:
-            return masks, labels
-
         cleaned_masks = masks.copy()
         valid_labels: Dict[str, int] = {}
 
@@ -773,13 +820,11 @@ class SegmentationService:
                 continue
 
             # Label connected components
-            labeled_components, n_components = ndimage.label(struct_mask)
+            labeled_components, n_components = _label_connected_components(struct_mask)
             if n_components > 1:
                 # Keep only components larger than 1% of the total
-                component_sizes = ndimage.sum(
-                    struct_mask, labeled_components, range(1, n_components + 1)
-                )
-                threshold = voxel_count * 0.01
+                component_sizes = _component_sizes(labeled_components, n_components)
+                threshold = max(voxel_count * 0.01, 2)
                 large_components = np.where(np.array(component_sizes) >= threshold)[0] + 1
                 cleaned_struct = np.isin(labeled_components, large_components).astype(np.uint8)
                 cleaned_masks[struct_mask > 0] = 0

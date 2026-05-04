@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import Boolean, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
@@ -22,17 +23,17 @@ class Patient(Base):
         default=lambda: str(uuid.uuid4()),
     )
     mrn_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    demographics_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    institution_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    age_at_registration: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    sex: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    demographics_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    institution_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    age_at_registration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sex: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
-    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, server_default=text("TRUE"), nullable=False
     )

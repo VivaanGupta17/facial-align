@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Upload, FileText, ChevronRight, Check, AlertCircle, X, Plus, AlertTriangle } from 'lucide-react'
-import { studiesApi, casesApi } from '../lib/api'
+import { studiesApi, casesApi, caseStudiesApi, segmentationApi } from '../lib/api'
 import { Spinner } from '../components/common/LoadingOverlay'
 import { useToastStore } from '../stores/toastStore'
 
@@ -32,6 +32,8 @@ export default function UploadPage() {
   const [uploadCancelled, setUploadCancelled] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [studyId, setStudyId] = useState<string | null>(null)
+  const [patientId, setPatientId] = useState<string | null>(null)
+  const [patientMrn, setPatientMrn] = useState('')
   const [jobId, setJobId] = useState<string | null>(null)
   const [dicomTags, setDicomTags] = useState<DicomTag[]>([])
   const [metadataLoading, setMetadataLoading] = useState(false)
@@ -39,6 +41,7 @@ export default function UploadPage() {
   const [notes, setNotes] = useState('')
   const [createdCaseNumber, setCreatedCaseNumber] = useState<string | null>(null)
   const [createdCaseId, setCreatedCaseId] = useState<string | null>(null)
+  const [segmentationQueued, setSegmentationQueued] = useState(false)
   // Chunked upload state
   const [isChunked, setIsChunked] = useState(false)
   const [chunkCurrent, setChunkCurrent] = useState(0)
@@ -93,6 +96,10 @@ export default function UploadPage() {
 
   const handleUpload = async () => {
     if (files.length === 0) return
+    if (!patientMrn.trim()) {
+      setUploadError('Patient MRN is required before upload.')
+      return
+    }
     setIsUploading(true)
     setUploadError(null)
     setUploadCancelled(false)
@@ -100,9 +107,9 @@ export default function UploadPage() {
     const useChunked = files[0].size > CHUNKED_THRESHOLD
     setIsChunked(useChunked)
     try {
-      let result: { jobId: string; studyId: string }
+      let result: { jobId: string; studyId: string; patientId: string }
       if (useChunked) {
-        result = await studiesApi.uploadChunked(files[0], 'auto-mrn', {
+        result = await studiesApi.uploadChunked(files[0], patientMrn.trim(), {
           signal: abortRef.current.signal,
           caseType: caseType,
           onProgress: (received, total, speedBps, etaSec) => {
@@ -114,11 +121,12 @@ export default function UploadPage() {
           },
         })
       } else {
-        result = await studiesApi.upload(files[0], setUploadProgress)
+        result = await studiesApi.upload(files[0], patientMrn.trim(), setUploadProgress)
       }
       if (uploadCancelled) return
       setJobId(result.jobId)
       setStudyId(result.studyId)
+      setPatientId(result.patientId)
 
       // Fetch real metadata from the study
       setMetadataLoading(true)
@@ -151,11 +159,39 @@ export default function UploadPage() {
   }
 
   const handleCreateCase = async () => {
+    if (!studyId || !patientId) {
+      addToast({ type: 'error', message: 'Upload a study successfully before creating a case.' })
+      return
+    }
+
     try {
       const newCase = await casesApi.create({
         caseType: caseType as any,
-        studyId: studyId ?? undefined,
+        patientId,
+        studyId,
       })
+
+      try {
+        const linkedStudies = await caseStudiesApi.list(newCase.id)
+        const primaryStudy = linkedStudies.find((item) => item.studyId === studyId) ?? linkedStudies[0]
+        if (primaryStudy) {
+          await caseStudiesApi.update(newCase.id, primaryStudy.studyId, {
+            studyRole: studyType,
+            studyLabel: studyLabel || undefined,
+            isPrimary: true,
+          })
+        }
+      } catch {
+        // Case-study link enrichment is best-effort; the case itself already exists.
+      }
+
+      try {
+        await segmentationApi.submitJob(newCase.id)
+        setSegmentationQueued(true)
+      } catch {
+        setSegmentationQueued(false)
+      }
+
       setCreatedCaseNumber(newCase.caseNumber)
       setCreatedCaseId(newCase.id)
       addToast({ type: 'success', message: `Case ${newCase.caseNumber} created successfully` })
@@ -267,6 +303,23 @@ export default function UploadPage() {
             </div>
           )}
 
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3" data-testid="patient-upload-metadata">
+            <div>
+              <label className="label-sm block mb-1.5">Patient MRN *</label>
+              <input
+                type="text"
+                value={patientMrn}
+                onChange={(e) => setPatientMrn(e.target.value)}
+                placeholder="Enter the source MRN for hashed patient matching"
+                className="input-base"
+                data-testid="patient-mrn-input"
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              The backend hashes the MRN immediately and never stores it in plaintext.
+            </p>
+          </div>
+
           {/* Upload progress */}
           {isUploading && (
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4" data-testid="upload-progress">
@@ -320,7 +373,7 @@ export default function UploadPage() {
             )}
             <button
               onClick={handleUpload}
-              disabled={files.length === 0 || isUploading}
+              disabled={files.length === 0 || isUploading || !patientMrn.trim()}
               className="flex items-center gap-2 btn-primary disabled:opacity-50"
               data-testid="upload-btn"
             >
@@ -520,13 +573,17 @@ export default function UploadPage() {
             </div>
             <div>
               <h2 className="text-xl font-bold text-slate-100">Case Created Successfully</h2>
-              <p className="text-slate-400 mt-2">AI segmentation has been queued — estimated completion in 12–18 minutes.</p>
+              <p className="text-slate-400 mt-2">
+                {segmentationQueued
+                  ? 'Baseline segmentation has been queued for this case.'
+                  : 'The case is ready. Segmentation can be launched from the case workspace if it was not queued automatically.'}
+              </p>
             </div>
 
             <div className="max-w-sm mx-auto bg-slate-800 border border-slate-700 rounded-lg p-4 text-left space-y-2">
               {[
                 { label: 'Case Number', value: createdCaseNumber ?? 'Pending...' },
-                { label: 'Status', value: 'Segmentation Queued' },
+                { label: 'Status', value: segmentationQueued ? 'Segmentation Queued' : 'Case Created' },
                 { label: 'Case Type', value: caseType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) },
               ].map(r => (
                 <div key={r.label} className="flex justify-between text-sm">

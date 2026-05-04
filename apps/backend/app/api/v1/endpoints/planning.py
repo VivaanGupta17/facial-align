@@ -24,6 +24,7 @@ from app.db.database import get_db_session
 from app.models.case import SurgicalCase
 from app.models.plan import ReductionPlan as ReductionPlanModel
 from app.models.segmentation import SegmentationResult
+from app.services.capabilities import build_provenance, get_capability_snapshot
 from app.schemas.common import JobStatus
 from app.schemas.export import ExportFileInfo, ExportRequest, ExportResponse
 from app.schemas.plan import (
@@ -40,6 +41,42 @@ from app.schemas.plan import (
 
 router = APIRouter(prefix="/planning", tags=["planning"])
 logger = get_logger(__name__)
+
+
+def _resolve_planning_model(requested_model_name: str) -> tuple[str, dict]:
+    """Resolve a planning request to an actual executable algorithm path."""
+
+    warnings: list[str] = []
+    fallback_reason: Optional[str] = None
+    snapshot = get_capability_snapshot()
+    capability_by_name = {cap.name: cap for cap in snapshot.capabilities}
+
+    resolved_model = requested_model_name
+    validation_tier = "deterministic_baseline"
+    beta_status = "not_beta"
+
+    if requested_model_name in {"learned_v1", "supervised_v1"}:
+        learned_cap = capability_by_name.get("reduction_learned_v1")
+        if learned_cap and not learned_cap.learned_available:
+            resolved_model = "baseline_icp"
+            validation_tier = "deterministic_baseline"
+            beta_status = "fallback"
+            fallback_reason = (
+                "Requested learned reduction model is unavailable; using baseline ICP planning."
+            )
+            warnings.append(fallback_reason)
+        else:
+            validation_tier = "learned_beta"
+            beta_status = "beta_available"
+
+    provenance = build_provenance(
+        algorithm_used=resolved_model,
+        validation_tier=validation_tier,
+        beta_status=beta_status,
+        warnings=warnings,
+        fallback_reason=fallback_reason,
+    )
+    return resolved_model, provenance
 
 
 def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
@@ -82,6 +119,7 @@ def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
     return ReductionPlanResponse(
         id=row.id,
         case_id=row.case_id,
+        segmentation_id=row.segmentation_id,
         plan_version=row.plan_version,
         status=row.status,
         model_name=row.model_name,
@@ -90,6 +128,7 @@ def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
         fragment_transforms=transforms,
         occlusal_constraints=occlusal_constraints,
         occlusal_metrics=occlusal_metrics,
+        provenance=row.provenance,
         confidence_score=row.confidence_score,
         surgeon_approved=row.surgeon_approved,
         surgeon_notes=row.surgeon_notes,
@@ -148,6 +187,8 @@ async def create_reduction_plan(
             error_code="SEGMENTATION_NOT_COMPLETE",
         )
 
+    resolved_model_name, provenance = _resolve_planning_model(payload.model_name)
+
     # Get next plan version
     existing_plans = (
         await db.execute(
@@ -163,12 +204,14 @@ async def create_reduction_plan(
     # Create placeholder plan record
     plan = ReductionPlanModel(
         case_id=payload.case_id,
+        segmentation_id=payload.segmentation_id,
         plan_version=next_version,
-        model_name=payload.model_name,
+        model_name=resolved_model_name,
         status="generating",
         dental_constraints=payload.occlusal_constraints.model_dump()
         if payload.occlusal_constraints else None,
-        is_ml_generated=True,
+        is_ml_generated=resolved_model_name not in {"baseline_icp", "occlusion_first"},
+        provenance=provenance,
     )
     db.add(plan)
     await db.flush()
@@ -177,7 +220,7 @@ async def create_reduction_plan(
         plan_id=str(plan.id),
         case_id=str(payload.case_id),
         segmentation_id=str(payload.segmentation_id),
-        model_name=payload.model_name,
+        model_name=resolved_model_name,
         dental_constraints=payload.occlusal_constraints.model_dump()
         if payload.occlusal_constraints else None,
         use_intact_reference=payload.use_intact_reference,
@@ -188,7 +231,7 @@ async def create_reduction_plan(
         "reduction_planning_job_submitted",
         plan_id=str(plan.id),
         case_id=str(payload.case_id),
-        model=payload.model_name,
+        model=resolved_model_name,
         job_id=task.id,
         plan_version=next_version,
     )
@@ -313,6 +356,7 @@ async def apply_surgeon_edit(
 
     new_plan = ReductionPlanModel(
         case_id=source_plan.case_id,
+        segmentation_id=source_plan.segmentation_id,
         plan_version=next_version,
         model_name=source_plan.model_name,
         model_version=source_plan.model_version,
@@ -325,6 +369,13 @@ async def apply_surgeon_edit(
         surgeon_notes=payload.notes,
         surgeon_edits=surgeon_edits,
         is_ml_generated=False,
+        provenance=build_provenance(
+            algorithm_used=source_plan.model_name or "manual_override",
+            validation_tier="manual_override",
+            beta_status="manual_override",
+            warnings=["Plan contains surgeon-authored manual edits."],
+            model_version=source_plan.model_version,
+        ),
     )
     db.add(new_plan)
     await db.flush()
@@ -398,6 +449,7 @@ async def override_occlusal_metric(
         "overbite_pct": "target_overbite_mm",
         "midline_deviation_mm": "midline_tolerance_mm",
         "occlusal_cant_deg": "cant_tolerance_degrees",
+        "molar_class": "molar_class_target",
     }
 
     # Build updated constraints with override
@@ -419,6 +471,7 @@ async def override_occlusal_metric(
 
     new_plan = ReductionPlanModel(
         case_id=source_plan.case_id,
+        segmentation_id=source_plan.segmentation_id,
         plan_version=next_version,
         model_name=source_plan.model_name,
         model_version=source_plan.model_version,
@@ -431,6 +484,13 @@ async def override_occlusal_metric(
         surgeon_notes=payload.notes,
         surgeon_edits=list(source_plan.surgeon_edits or []),
         is_ml_generated=False,
+        provenance=build_provenance(
+            algorithm_used=source_plan.model_name or "manual_override",
+            validation_tier="manual_override",
+            beta_status="manual_override",
+            warnings=["Plan contains surgeon-authored metric overrides."],
+            model_version=source_plan.model_version,
+        ),
     )
     db.add(new_plan)
     await db.flush()

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field, field_validator, model_validator
 
+from app.schemas.capabilities import ProvenanceInfo
 from app.schemas.common import BaseSchema, BoundingBox3D, Transform3D
 
 
@@ -228,7 +229,13 @@ class MetricOverrideRequest(BaseSchema):
     @field_validator("metric_name")
     @classmethod
     def validate_metric_name(cls, v: str) -> str:
-        valid = {"overjet_mm", "overbite_pct", "midline_deviation_mm", "occlusal_cant_deg"}
+        valid = {
+            "overjet_mm",
+            "overbite_pct",
+            "midline_deviation_mm",
+            "occlusal_cant_deg",
+            "molar_class",
+        }
         if v not in valid:
             raise ValueError(f"metric_name must be one of: {valid}")
         return v
@@ -238,6 +245,7 @@ class ReductionPlanResponse(BaseSchema):
     """Complete reduction plan response."""
     id: uuid.UUID
     case_id: uuid.UUID
+    segmentation_id: Optional[uuid.UUID] = None
     plan_version: int
     status: str
     model_name: Optional[str]
@@ -250,6 +258,7 @@ class ReductionPlanResponse(BaseSchema):
     validation: Optional[ValidationResult] = None
 
     confidence_score: Optional[float] = None
+    provenance: Optional[ProvenanceInfo] = None
     surgeon_approved: bool = False
     surgeon_notes: Optional[str] = None
     parent_plan_id: Optional[uuid.UUID] = None

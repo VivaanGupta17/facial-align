@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field, field_validator
 
+from app.schemas.capabilities import ProvenanceInfo
 from app.schemas.common import BaseSchema, BoundingBox3D
 
 
@@ -125,10 +126,15 @@ class SegmentationResult(BaseSchema):
 
     structure_labels: Optional[List[StructureLabel]] = None
     confidence_maps: Optional[List[ConfidenceMap]] = None
+    structure_reviews: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Per-structure clinician review state keyed by structure name",
+    )
     overall_confidence: Optional[float] = Field(
         None, ge=0.0, le=1.0,
         description="Aggregate segmentation confidence"
     )
+    provenance: Optional[ProvenanceInfo] = None
 
     mask_storage_path: Optional[str] = None
     meshes: Optional[List[MeshInfo]] = None
@@ -136,9 +142,14 @@ class SegmentationResult(BaseSchema):
     fragment_count: Optional[int] = Field(
         None, description="Number of identified bone fragments (trauma)"
     )
+    fracture_fragments: Optional[List[dict[str, Any]]] = Field(
+        None,
+        description="Explicit fracture fragment definitions derived from connected components",
+    )
 
     inference_time_ms: Optional[int] = None
     total_pipeline_time_ms: Optional[int] = None
+    gpu_device: Optional[str] = None
 
     error_message: Optional[str] = None
     created_at: datetime

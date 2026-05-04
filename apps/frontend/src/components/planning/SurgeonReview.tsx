@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Check, X, Clock, MessageSquare, Pen, AlertTriangle, GitCompare, CheckSquare, Square, Trash2 } from 'lucide-react'
-import { useSurgeonReview, useApproveReview, useRequestRevision, usePlan } from '../../hooks/usePlanning'
+import { useSurgeonReview, useApproveReview, useRequestRevision, useRejectReview, usePlan } from '../../hooks/usePlanning'
 import { useSegmentationResult } from '../../hooks/useSegmentation'
 import { reviewApi } from '../../lib/api'
 import { PageLoading, ErrorState } from '../common/LoadingOverlay'
@@ -210,6 +210,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
   const { data: plan } = usePlan(planId)
   const approveReview = useApproveReview(caseId)
   const requestRevision = useRequestRevision(caseId)
+  const rejectReview = useRejectReview(caseId)
 
   if (reviewLoading) return <PageLoading label="Loading review panel..." />
   if (error || !review) return <ErrorState description="Failed to load review" />
@@ -221,13 +222,20 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
   const passedCount = checklist.filter(c => c.passed === true).length
   const failedCount = checklist.filter(c => c.passed === false).length
 
-  const handleToggle = (id: string, passed: boolean) => {
+  const handleToggle = async (id: string, passed: boolean) => {
     const base = localChecklist ?? review.checklist
     setLocalChecklist(base.map(c => c.id === id ? { ...c, passed: passed ? true : false } : c))
+
+    try {
+      const updated = await reviewApi.updateChecklist(review.id, id, passed)
+      setLocalChecklist(updated.checklist)
+    } catch {
+      setLocalChecklist(base)
+    }
   }
 
   const handleApprove = async () => {
-    await approveReview.mutateAsync({ reviewId: review.id, notes })
+    await approveReview.mutateAsync({ reviewId: review.id, notes, signature })
   }
 
   const handleRequestRevision = async () => {
@@ -235,7 +243,7 @@ export default function SurgeonReview({ caseId, planId }: SurgeonReviewProps) {
   }
 
   const handleReject = async () => {
-    await reviewApi.reject(review.id, notes)
+    await rejectReview.mutateAsync({ reviewId: review.id, notes })
   }
 
   const isDecided = review.decision !== 'pending'

@@ -72,8 +72,8 @@ export function useSurgeonReview(caseId: string) {
 export function useApproveReview(caseId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ reviewId, notes }: { reviewId: string; notes: string }) =>
-      reviewApi.approve(reviewId, notes),
+    mutationFn: ({ reviewId, notes, signature }: { reviewId: string; notes: string; signature?: string }) =>
+      reviewApi.approve(reviewId, notes, signature),
     onSuccess: () => { qc.invalidateQueries({ queryKey: planningKeys.review(caseId) }) },
   })
 }

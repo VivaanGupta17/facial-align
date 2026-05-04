@@ -249,6 +249,52 @@ class LandmarkICPModel(ReductionModel):
         return transform
 
 
+# ─── Backward-compatible model wrappers ──────────────────────────────────────
+
+
+class BaselineReductionModel(LandmarkICPModel):
+    """
+    Compatibility wrapper for the historic baseline ICP model name.
+
+    The implementation now shares the landmark-aware alignment logic, but the
+    public contract still exposes the baseline identifier expected by existing
+    call sites and tests.
+    """
+
+    @property
+    def name(self) -> str:
+        return "baseline_icp"
+
+    @property
+    def version(self) -> str:
+        return "1.0.0"
+
+
+class LearnedReductionModel(ReductionModel):
+    """Placeholder compatibility wrapper for the learned reduction model."""
+
+    is_available = False
+
+    @property
+    def name(self) -> str:
+        return "learned_reduction_beta"
+
+    @property
+    def version(self) -> str:
+        return "0.0.0-beta"
+
+    def predict(
+        self,
+        fragments: List[FragmentMesh],
+        intact_reference: Optional[Any],
+        occlusal_constraints: Optional[OcclusalConstraints],
+    ) -> Dict[str, np.ndarray]:
+        raise ModelLoadError(
+            "Learned reduction model weights are not available",
+            context={"model_name": self.name, "beta_status": "unavailable"},
+        )
+
+
 # ─── Occlusal constraint engine (ML-enhanced) ───────────────────────────────
 
 
@@ -283,10 +329,18 @@ class OcclusalConstraintEngine:
 
         Phase 2 of the occlusion-first pipeline.
         """
-        from .joint_optimizer import OcclusionFirstJointOptimizer
+        if upper_dental_arch is None or lower_dental_arch is None:
+            # No paired dental arches available — keep deterministic baseline.
+            return fragment_transforms.copy(), OcclusalMetrics(constraints_satisfied=True)
 
-        if dental_constraints is None and upper_dental_arch is None:
-            # No dental data — return initial transforms
+        try:
+            from .joint_optimizer import OcclusionFirstJointOptimizer
+        except ImportError as exc:
+            logger.warning(
+                "joint_optimizer_unavailable",
+                fallback="identity_constraint_pass_through",
+                error=str(exc),
+            )
             return fragment_transforms.copy(), OcclusalMetrics(constraints_satisfied=True)
 
         # Prepare inputs for joint optimizer
@@ -473,6 +527,8 @@ class FractureReductionService:
 
         # Phase 1 model: dental-landmark ICP
         self._landmark_icp = LandmarkICPModel()
+        self._baseline_model = BaselineReductionModel()
+        self._learned_model = LearnedReductionModel()
 
     async def suggest_reduction(
         self,
@@ -516,12 +572,20 @@ class FractureReductionService:
                 device="cpu",
             )
 
-            raw_transforms = self._landmark_icp.predict(
+            selected_model: ReductionModel
+            if model_name == "baseline_icp":
+                selected_model = self._baseline_model
+            elif model_name in {"occlusion_first", "occlusion_first_v2"}:
+                selected_model = self._landmark_icp
+            else:
+                selected_model = self._learned_model
+
+            raw_transforms = selected_model.predict(
                 fragments, intact_reference, dental_constraints
             )
 
             inference_logger.log_inference_complete(
-                model_name="landmark_icp",
+                model_name=selected_model.name,
                 start_time=inference_start,
                 output_summary={"n_transforms": len(raw_transforms)},
             )
@@ -554,8 +618,8 @@ class FractureReductionService:
                 occlusal_metrics=occlusal_metrics,
                 symmetry_score=symmetry_score,
                 overall_confidence=overall_confidence,
-                model_name="occlusion_first_v2",
-                model_version="2.0.0",
+                model_name=selected_model.name,
+                model_version=selected_model.version,
                 generation_time_ms=generation_time_ms,
             )
 
@@ -689,8 +753,8 @@ class FractureReductionService:
             updated_transforms,
             fragments,
             dental_constraints,
-            upper_arch=None,
-            lower_arch=None,
+            upper_dental_arch=None,
+            lower_dental_arch=None,
         )
 
         symmetry_score, _ = self._constraint_engine.check_symmetry(

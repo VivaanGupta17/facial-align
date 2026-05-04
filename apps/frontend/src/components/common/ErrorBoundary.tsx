@@ -178,7 +178,7 @@ function FullErrorFallback({ formatted, onReset, severity, errorInfo }: Fallback
         </div>
 
         {/* Component stack (dev only) */}
-        {process.env.NODE_ENV === 'development' && errorInfo?.componentStack && (
+        {import.meta.env.DEV && errorInfo?.componentStack && (
           <details className="group">
             <summary className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer hover:text-slate-300 select-none">
               <Bug size={11} />

@@ -64,7 +64,7 @@ let registryVersion = 0
 
 function registerShortcut(s: KeyboardShortcut): () => void {
   const id = shortcutId(s)
-  if (registry.has(id) && process.env.NODE_ENV === 'development') {
+  if (registry.has(id) && import.meta.env.DEV) {
     console.warn(`[useKeyboardShortcuts] Shortcut conflict: "${id}" is already registered. Overwriting.`)
   }
   registry.set(id, s)

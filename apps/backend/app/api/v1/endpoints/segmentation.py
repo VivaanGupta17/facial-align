@@ -18,6 +18,7 @@ from app.core.security import CurrentUser, get_current_user, require_surgeon
 from app.db.database import get_db_session
 from app.models.case import SurgicalCase
 from app.models.segmentation import SegmentationResult as SegmentationModel
+from app.services.capabilities import build_provenance, get_capability_snapshot
 from app.schemas.common import JobStatus
 from app.schemas.segmentation import (
     ConfidenceMap,
@@ -30,6 +31,53 @@ from app.schemas.segmentation import (
 
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 logger = get_logger(__name__)
+
+
+def _resolve_segmentation_request(
+    model_name: str,
+    run_dental_segmentation: bool,
+) -> tuple[str, bool, dict]:
+    """Resolve the requested segmentation settings to an honest executable path."""
+
+    warnings: list[str] = []
+    fallback_reason: Optional[str] = None
+    snapshot = get_capability_snapshot()
+    capability_by_name = {cap.name: cap for cap in snapshot.capabilities}
+
+    requested_model = model_name
+    resolved_model = model_name
+    validation_tier = "deterministic_baseline"
+    beta_status = "not_beta"
+
+    if requested_model == "cmf_custom_v1":
+        cmf_cap = capability_by_name.get("segmentation_learned_cmf")
+        if cmf_cap and not cmf_cap.learned_available:
+            resolved_model = "totalsegmentator"
+            validation_tier = "deterministic_baseline"
+            beta_status = "fallback"
+            fallback_reason = "Requested CMF learned model is unavailable; using TotalSegmentator baseline."
+            warnings.append(fallback_reason)
+        else:
+            validation_tier = "learned_beta"
+            beta_status = "beta_available"
+
+    resolved_run_dental = run_dental_segmentation
+    if run_dental_segmentation:
+        dental_cap = capability_by_name.get("dental_segmentation")
+        if dental_cap and not dental_cap.learned_available:
+            resolved_run_dental = False
+            warning = "Dental segmentation requested but artifacts are unavailable; disabling dental beta path."
+            warnings.append(warning)
+            fallback_reason = fallback_reason or warning
+
+    provenance = build_provenance(
+        algorithm_used=resolved_model,
+        validation_tier=validation_tier,
+        beta_status=beta_status,
+        warnings=warnings,
+        fallback_reason=fallback_reason,
+    )
+    return resolved_model, resolved_run_dental, provenance
 
 
 @router.post(
@@ -58,12 +106,18 @@ async def trigger_segmentation(
     if not case:
         raise CaseNotFoundError(f"Case {payload.case_id} not found")
 
+    resolved_model, resolved_run_dental, provenance = _resolve_segmentation_request(
+        payload.model_name,
+        payload.run_dental_segmentation,
+    )
+
     # Create pending segmentation record
     seg_record = SegmentationModel(
         case_id=payload.case_id,
-        model_name=payload.model_name,
+        model_name=resolved_model,
         model_version="pending",
         status="pending",
+        provenance=provenance,
     )
     db.add(seg_record)
     await db.flush()
@@ -73,9 +127,9 @@ async def trigger_segmentation(
         segmentation_id=str(seg_record.id),
         case_id=str(payload.case_id),
         study_id=str(case.study_id),
-        model_name=payload.model_name,
+        model_name=resolved_model,
         structures=payload.structures,
-        run_dental=payload.run_dental_segmentation,
+        run_dental=resolved_run_dental,
         identify_fragments=payload.identify_fragments,
         fast_mode=payload.fast_mode,
         gpu_device=payload.gpu_device,
@@ -89,12 +143,12 @@ async def trigger_segmentation(
         "segmentation_job_submitted",
         case_id=str(payload.case_id),
         segmentation_id=str(seg_record.id),
-        model=payload.model_name,
+        model=resolved_model,
         job_id=task.id,
     )
 
     # Estimate duration based on model
-    estimated_duration = 600 if payload.model_name == "totalsegmentator" else 1200
+    estimated_duration = 600 if resolved_model == "totalsegmentator" else 1200
     if payload.fast_mode:
         estimated_duration = estimated_duration // 3
 
@@ -359,10 +413,16 @@ async def request_resegmentation(
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
 
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == row.case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {row.case_id} not found")
+
     task = run_segmentation_pipeline.delay(
         segmentation_id=str(segmentation_id),
         case_id=str(row.case_id),
-        study_id="",
+        study_id=str(case.study_id),
         model_name=row.model_name,
         structures=[label],
         run_dental=False,
@@ -398,6 +458,37 @@ def _to_schema(row: SegmentationModel) -> SegmentationResult:
         for name, label_val in row.structure_labels.items():
             labels.append(StructureLabel(name=name, label_value=label_val))
 
+    confidence_maps: list[ConfidenceMap] = []
+    if row.confidence_scores:
+        volume_stats = row.volume_stats or {}
+        for structure_name, mean_confidence in row.confidence_scores.items():
+            stats = volume_stats.get(structure_name, {}) if isinstance(volume_stats, dict) else {}
+            bounding_box = None
+            bbox_data = stats.get("bounding_box")
+            if isinstance(bbox_data, dict):
+                try:
+                    bounding_box = {
+                        "min_x": bbox_data["min_x"],
+                        "min_y": bbox_data["min_y"],
+                        "min_z": bbox_data["min_z"],
+                        "max_x": bbox_data["max_x"],
+                        "max_y": bbox_data["max_y"],
+                        "max_z": bbox_data["max_z"],
+                    }
+                except KeyError:
+                    bounding_box = None
+
+            confidence_maps.append(
+                ConfidenceMap(
+                    structure_name=structure_name,
+                    mean_confidence=float(mean_confidence),
+                    volume_voxels=stats.get("voxel_count"),
+                    volume_cc=stats.get("volume_cc"),
+                    bounding_box=bounding_box,
+                    quality_flag=stats.get("quality_flag"),
+                )
+            )
+
     meshes: list[MeshInfo] = []
     if row.mesh_storage_paths:
         for structure, paths in row.mesh_storage_paths.items():
@@ -412,12 +503,17 @@ def _to_schema(row: SegmentationModel) -> SegmentationResult:
         model_name=row.model_name,
         model_version=row.model_version,
         structure_labels=labels or None,
+        confidence_maps=confidence_maps or None,
+        structure_reviews=row.structures,
         overall_confidence=row.overall_confidence,
+        provenance=row.provenance,
         mask_storage_path=row.mask_storage_path,
         meshes=meshes or None,
         fragment_count=row.fragment_count,
+        fracture_fragments=list((row.fracture_fragments or {}).values()) or None,
         inference_time_ms=row.inference_time_ms,
         total_pipeline_time_ms=row.total_pipeline_time_ms,
+        gpu_device=row.gpu_device,
         error_message=row.error_message,
         created_at=row.created_at,
         completed_at=row.completed_at,
