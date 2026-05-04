@@ -1,7 +1,7 @@
-import { useRef, useState, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { useGLTF } from '@react-three/drei'
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { StructureLabel } from '../../types/medical'
 
 interface AnatomyMeshProps {
@@ -23,52 +23,11 @@ interface AnatomyMeshProps {
 }
 
 /**
- * Loads a real GLB mesh via useGLTF and applies material props.
- * Rendered when meshUri is provided.
- */
-function RealMesh({
-  meshUri,
-  displayColor,
-  opacity,
-  wireframe,
-  emissiveColor,
-  emissiveIntensity,
-}: {
-  meshUri: string
-  displayColor: THREE.Color
-  opacity: number
-  wireframe: boolean
-  emissiveColor: THREE.Color
-  emissiveIntensity: number
-}) {
-  const { scene } = useGLTF(meshUri)
-
-  const clonedScene = useMemo(() => {
-    const clone = scene.clone(true)
-    clone.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.material = new THREE.MeshStandardMaterial({
-          color: displayColor,
-          opacity,
-          transparent: opacity < 1,
-          wireframe,
-          emissive: emissiveColor,
-          emissiveIntensity,
-          side: THREE.DoubleSide,
-        })
-      }
-    })
-    return clone
-  }, [scene, displayColor, opacity, wireframe, emissiveColor, emissiveIntensity])
-
-  return <primitive object={clonedScene} />
-}
-
-/**
  * Individual anatomy mesh component.
  *
- * When meshUri is provided, loads a real GLB mesh via useGLTF.
- * Otherwise renders placeholder geometry as a fallback.
+ * When meshUri is provided, it attempts to load a real GLB mesh.
+ * If the mesh is unavailable or invalid, it falls back to placeholder geometry
+ * instead of crashing the entire viewer.
  */
 export default function AnatomyMesh({
   label,
@@ -86,6 +45,7 @@ export default function AnatomyMesh({
 }: AnatomyMeshProps) {
   const meshRef = useRef<THREE.Mesh>(null!)
   const [hovered, setHovered] = useState(false)
+  const [loadedScene, setLoadedScene] = useState<THREE.Group | null>(null)
 
   // Subtle animation on selection
   useFrame((_, delta) => {
@@ -95,25 +55,78 @@ export default function AnatomyMesh({
     }
   })
 
+  useEffect(() => {
+    if (!meshUri) {
+      setLoadedScene(null)
+      return
+    }
+
+    let cancelled = false
+    const loader = new GLTFLoader()
+
+    loader.load(
+      meshUri,
+      (gltf) => {
+        if (!cancelled) {
+          setLoadedScene(gltf.scene)
+        }
+      },
+      undefined,
+      () => {
+        if (!cancelled) {
+          setLoadedScene(null)
+        }
+      },
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [meshUri])
+
+  const { displayColor, emissiveColor, emissiveIntensity } = useMemo(() => {
+    const baseColor = new THREE.Color(color)
+    const nextDisplayColor = hovered
+      ? baseColor.clone().lerp(new THREE.Color('#ffffff'), 0.25)
+      : selected
+      ? baseColor.clone().lerp(new THREE.Color('#22d3ee'), 0.4)
+      : baseColor
+
+    const nextEmissiveColor = selected
+      ? new THREE.Color('#06b6d4')
+      : hovered
+      ? new THREE.Color('#94a3b8')
+      : new THREE.Color('#000000')
+
+    return {
+      displayColor: nextDisplayColor,
+      emissiveColor: nextEmissiveColor,
+      emissiveIntensity: selected ? 0.15 : hovered ? 0.08 : 0,
+    }
+  }, [color, hovered, selected])
+
+  const renderedScene = useMemo(() => {
+    if (!loadedScene) return null
+
+    const clone = loadedScene.clone(true)
+    clone.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.material = new THREE.MeshStandardMaterial({
+          color: displayColor,
+          opacity,
+          transparent: opacity < 1,
+          wireframe,
+          emissive: emissiveColor,
+          emissiveIntensity,
+          side: THREE.DoubleSide,
+        })
+      }
+    })
+
+    return clone
+  }, [displayColor, emissiveColor, emissiveIntensity, loadedScene, opacity, wireframe])
+
   if (!visible) return null
-
-  // Convert hex color to Three.js color
-  const threeColor = new THREE.Color(color)
-
-  // Hover / selected appearance
-  const displayColor = hovered
-    ? threeColor.clone().lerp(new THREE.Color('#ffffff'), 0.25)
-    : selected
-    ? threeColor.clone().lerp(new THREE.Color('#22d3ee'), 0.4)
-    : threeColor
-
-  const emissiveColor = selected
-    ? new THREE.Color('#06b6d4')
-    : hovered
-    ? new THREE.Color('#94a3b8')
-    : new THREE.Color('#000000')
-
-  const emissiveIntensity = selected ? 0.15 : hovered ? 0.08 : 0
 
   // Placeholder geometry selection based on anatomical structure
   const PlaceholderGeometry = () => {
@@ -192,22 +205,15 @@ export default function AnatomyMesh({
   return (
     <group
       ref={meshRef as any}
+      name={label}
       position={position}
       rotation={rotation.map(r => (r * Math.PI) / 180) as [number, number, number]}
       onClick={(e) => { e.stopPropagation(); onClick?.() }}
       onPointerOver={(e) => { e.stopPropagation(); setHovered(true); onHover?.(true); document.body.style.cursor = 'pointer' }}
       onPointerOut={() => { setHovered(false); onHover?.(false); document.body.style.cursor = 'auto' }}
-      data-testid={`anatomy-mesh-${label}`}
     >
-      {meshUri ? (
-        <RealMesh
-          meshUri={meshUri}
-          displayColor={displayColor}
-          opacity={opacity}
-          wireframe={wireframe}
-          emissiveColor={emissiveColor}
-          emissiveIntensity={emissiveIntensity}
-        />
+      {renderedScene ? (
+        <primitive object={renderedScene} />
       ) : (
         <PlaceholderGeometry />
       )}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { lazy, Suspense, type ReactNode, useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Clock, User, FileText, Layers, Target, AlignCenter,
@@ -9,20 +9,21 @@ import { useCase } from '../hooks/useCases'
 import { useCaseStore } from '../stores/caseStore'
 import { useToastStore } from '../stores/toastStore'
 import StatusBadge from '../components/common/StatusBadge'
-import { PageLoading, Skeleton } from '../components/common/LoadingOverlay'
+import { PageLoading } from '../components/common/LoadingOverlay'
 import JobProgressBar from '../components/common/JobProgressBar'
-import SegmentationReview from '../components/planning/SegmentationReview'
-import ReductionWorkspace from '../components/planning/ReductionWorkspace'
-import OcclusionWorkspace from '../components/planning/OcclusionWorkspace'
-import SurgeonReview from '../components/planning/SurgeonReview'
-import ExportPanel from '../components/planning/ExportPanel'
 import { casesApi, caseStudiesApi } from '../lib/api'
 import { useWebSocket, type WsMessage } from '../hooks/useWebSocket'
 import type { SurgicalCase } from '../types/medical'
 
+const SegmentationReview = lazy(() => import('../components/planning/SegmentationReview'))
+const ReductionWorkspace = lazy(() => import('../components/planning/ReductionWorkspace'))
+const OcclusionWorkspace = lazy(() => import('../components/planning/OcclusionWorkspace'))
+const SurgeonReview = lazy(() => import('../components/planning/SurgeonReview'))
+const ExportPanel = lazy(() => import('../components/planning/ExportPanel'))
+
 type Tab = 'overview' | 'segmentation' | 'planning' | 'occlusion' | 'review' | 'history'
 
-const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
+const TABS: Array<{ id: Tab; label: string; icon: ReactNode }> = [
   { id: 'overview', label: 'Overview', icon: <FileText size={14} /> },
   { id: 'segmentation', label: 'Segmentation', icon: <Layers size={14} /> },
   { id: 'planning', label: 'Planning', icon: <Target size={14} /> },
@@ -60,6 +61,18 @@ function truncateId(id: string | null) {
 
 function fmtTransition(t: string) {
   return t.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+}
+
+function WorkspaceFallback({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-[420px] items-center justify-center px-6 py-10" data-testid="case-workspace-loading">
+      <PageLoading label={label} />
+    </div>
+  )
+}
+
+function renderWorkspace(element: ReactNode, label: string) {
+  return <Suspense fallback={<WorkspaceFallback label={label} />}>{element}</Suspense>
 }
 
 // ---------------------------
@@ -527,13 +540,19 @@ export default function CaseDetailPage() {
       {/* Tab content */}
       <div className="flex-1 overflow-auto">
         {activeTab === 'overview' && <OverviewTab caseData={caseData} />}
-        {activeTab === 'segmentation' && <SegmentationReview caseId={caseData.id} />}
+        {activeTab === 'segmentation' && renderWorkspace(
+          <SegmentationReview caseId={caseData.id} />,
+          'Loading segmentation review...',
+        )}
         {activeTab === 'planning' && (
           <div className="relative h-full">
             {caseData.latestPlan && (
               <div className="absolute top-4 right-4 z-10">
                 {showExportPanel ? (
-                  <ExportPanel planId={caseData.latestPlan} onClose={() => setShowExportPanel(false)} />
+                  renderWorkspace(
+                    <ExportPanel planId={caseData.latestPlan} onClose={() => setShowExportPanel(false)} />,
+                    'Loading export tools...',
+                  )
                 ) : (
                   <button
                     onClick={() => setShowExportPanel(true)}
@@ -546,11 +565,20 @@ export default function CaseDetailPage() {
                 )}
               </div>
             )}
-            <ReductionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />
+            {renderWorkspace(
+              <ReductionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />,
+              'Loading reduction workspace...',
+            )}
           </div>
         )}
-        {activeTab === 'occlusion' && <OcclusionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />}
-        {activeTab === 'review' && <SurgeonReview caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />}
+        {activeTab === 'occlusion' && renderWorkspace(
+          <OcclusionWorkspace caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />,
+          'Loading occlusion workspace...',
+        )}
+        {activeTab === 'review' && renderWorkspace(
+          <SurgeonReview caseId={caseData.id} planId={caseData.latestPlan ?? undefined} />,
+          'Loading surgeon review...',
+        )}
         {activeTab === 'history' && <HistoryTab caseData={caseData} />}
       </div>
     </div>

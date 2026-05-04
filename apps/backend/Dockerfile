@@ -120,7 +120,7 @@ RUN pip install --no-cache-dir \
     celery[redis]>=5.3.6 \
     redis>=5.0.4 \
     python-jose[cryptography]>=3.3.0 \
-    passlib[bcrypt]>=1.7.4 \
+    bcrypt>=4.1,<5 \
     cryptography>=42.0.5 \
     structlog>=24.1.0 \
     python-multipart>=0.0.9 \

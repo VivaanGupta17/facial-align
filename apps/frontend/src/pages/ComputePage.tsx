@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Cpu, Clock, Activity, RefreshCw, HardDrive, Thermometer, Zap, AlertTriangle } from 'lucide-react'
+import { Cpu, Activity, RefreshCw, HardDrive, Thermometer, Zap, AlertTriangle } from 'lucide-react'
 import { dashboardApi } from '../lib/api'
 import { Skeleton } from '../components/common/LoadingOverlay'
 import PageHeader from '../components/common/PageHeader'

@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, Text, text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -52,10 +52,14 @@ class ImagingStudy(Base):
     )
     uploaded_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
 
     # Relationships

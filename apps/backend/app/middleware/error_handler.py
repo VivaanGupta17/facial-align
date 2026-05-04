@@ -69,10 +69,10 @@ _EXCEPTION_MAP: list[tuple[type[Exception], int, str]] = [
     # Auth
     (AuthorizationError,           status.HTTP_403_FORBIDDEN,              "FORBIDDEN"),
     # Validation
-    (RequestValidationError,       status.HTTP_422_UNPROCESSABLE_ENTITY,   "VALIDATION_ERROR"),
-    (ValidationError,              status.HTTP_422_UNPROCESSABLE_ENTITY,   "VALIDATION_ERROR"),
+    (RequestValidationError,       status.HTTP_422_UNPROCESSABLE_CONTENT,  "VALIDATION_ERROR"),
+    (ValidationError,              status.HTTP_422_UNPROCESSABLE_CONTENT,  "VALIDATION_ERROR"),
     # DICOM
-    (DicomError,                   status.HTTP_422_UNPROCESSABLE_ENTITY,   "DICOM_ERROR"),
+    (DicomError,                   status.HTTP_422_UNPROCESSABLE_CONTENT,  "DICOM_ERROR"),
     # Not found
     (NotFoundError,                status.HTTP_404_NOT_FOUND,              "NOT_FOUND"),
     # ML inference
@@ -227,7 +227,7 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
         return _build_error_response(
             error_code="VALIDATION_ERROR",
             message="Request validation failed. Check the 'details' field for field-level errors.",
-            http_status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            http_status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             request_id=request_id,
             details=errors,
             is_production=self._is_production,
@@ -377,7 +377,7 @@ async def validation_exception_handler(
     return _build_error_response(
         error_code="VALIDATION_ERROR",
         message="Request validation failed.",
-        http_status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        http_status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         request_id=request_id,
         details=errors,
         is_production=False,  # validation errors are always safe to return

@@ -5,7 +5,6 @@ import { useSegmentationResult } from '../../hooks/useSegmentation'
 import { usePlanningStore } from '../../stores/planningStore'
 import { planningApi } from '../../lib/api'
 import Viewer3D from '../viewer/Viewer3D'
-import { MetricInline } from '../common/MetricCard'
 import { PageLoading } from '../common/LoadingOverlay'
 import type { AngleClass } from '../../types/medical'
 

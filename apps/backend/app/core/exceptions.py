@@ -88,7 +88,7 @@ class SegmentationNotFoundError(NotFoundError):
 class ValidationError(FacialAlignError):
     """Input validation failure."""
 
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "VALIDATION_ERROR"
 
 
@@ -142,7 +142,7 @@ class InsufficientPermissionsError(AuthorizationError):
 class DicomError(FacialAlignError):
     """Base class for DICOM processing errors."""
 
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "DICOM_ERROR"
 
 
@@ -153,6 +153,7 @@ class DicomParseError(DicomError):
 
 class DicomValidationError(DicomError):
     """DICOM data fails quality or completeness checks."""
+    http_status = status.HTTP_400_BAD_REQUEST
     error_code = "DICOM_VALIDATION_ERROR"
 
 
@@ -205,7 +206,7 @@ class PostProcessingError(SegmentationError):
 
 class LowConfidenceSegmentationError(SegmentationError):
     """Segmentation confidence below acceptable threshold."""
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "LOW_CONFIDENCE_SEGMENTATION"
 
 
@@ -231,7 +232,7 @@ class MeshSimplificationError(MeshError):
 
 class EmptyMaskError(MeshError):
     """Mask is empty; cannot extract mesh."""
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "EMPTY_MASK"
 
 
@@ -262,7 +263,7 @@ class RegistrationDivergenceError(RegistrationError):
 
 class InsufficientOverlapError(RegistrationError):
     """Source and target meshes have insufficient overlap for registration."""
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "INSUFFICIENT_OVERLAP"
 
 
@@ -283,13 +284,13 @@ class FractureFragmentError(ReductionPlanningError):
 
 class ReductionConstraintViolation(ReductionPlanningError):
     """Reduction plan violates anatomical or occlusal constraints."""
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "CONSTRAINT_VIOLATION"
 
 
 class SymmetryThresholdError(ReductionPlanningError):
     """Planned reduction exceeds skeletal symmetry threshold."""
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "SYMMETRY_THRESHOLD_EXCEEDED"
 
 
@@ -358,10 +359,10 @@ class TaskTimeoutError(TaskError):
 
 EXCEPTION_STATUS_MAP: dict[type[FacialAlignError], int] = {
     NotFoundError: status.HTTP_404_NOT_FOUND,
-    ValidationError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    ValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ConflictError: status.HTTP_409_CONFLICT,
     AuthorizationError: status.HTTP_403_FORBIDDEN,
-    DicomError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    DicomError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     SegmentationError: status.HTTP_500_INTERNAL_SERVER_ERROR,
     ModelNotAvailableError: status.HTTP_404_NOT_FOUND,
     MeshError: status.HTTP_500_INTERNAL_SERVER_ERROR,

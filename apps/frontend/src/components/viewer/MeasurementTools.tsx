@@ -341,7 +341,7 @@ interface MeasurementListProps {
 
 export function MeasurementList({ className = '' }: MeasurementListProps) {
   const { viewerState, removeMeasurement, clearMeasurements, setActiveTool, addMeasurement } = useViewerStore()
-  const { measurements, activeTool, showMeasurements } = viewerState
+  const { measurements, activeTool } = viewerState
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
 
   const toggleVisibility = useCallback((id: string) => {

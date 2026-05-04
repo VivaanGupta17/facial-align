@@ -34,8 +34,21 @@ export default function StudiesPage() {
     staleTime: 30_000,
   })
 
-  if (isLoading) return <PageLoading label="Loading studies..." />
-  if (error) return <ErrorState description="Failed to load studies" />
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex flex-col p-6 animate-fade-in" data-testid="studies-page">
+        <PageLoading label="Loading studies..." />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex-1 flex flex-col p-6 animate-fade-in" data-testid="studies-page">
+        <ErrorState description="Failed to load studies" />
+      </div>
+    )
+  }
 
   const studies = data?.items ?? []
   const filtered = search

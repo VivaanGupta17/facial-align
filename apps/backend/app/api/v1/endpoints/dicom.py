@@ -39,6 +39,10 @@ MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024 * 1024  # 20 GB
 CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB default chunk size
 
 
+def _optional_str(value: object) -> Optional[str]:
+    return value if isinstance(value, str) else None
+
+
 @router.post(
     "/upload",
     response_model=DicomUploadResponse,
@@ -241,9 +245,17 @@ async def get_study_metadata(
         study_uid=study.study_uid,
         modality=study.modality,
         acquisition_date=study.acquisition_date,
-        body_part_examined=study.body_part_examined,
+        body_part_examined=_optional_str(getattr(study, "body_part_examined", None)),
         study_description=meta.get("StudyDescription"),
-        series=[],  # TODO: populate from series table or metadata
+        series=[
+            {
+                "series_instance_uid": meta.get("SeriesInstanceUID", "unknown"),
+                "series_number": meta.get("SeriesNumber", 1),
+                "series_description": meta.get("SeriesDescription", "Axial CT"),
+                "modality": study.modality,
+                "slice_count": study.slice_count or 0,
+            }
+        ] if study.series_count > 0 else [],
         series_count=study.series_count,
         total_slice_count=study.slice_count or 0,
         institution_name=meta.get("InstitutionName"),

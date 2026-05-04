@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, text
+from sqlalchemy import DateTime, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,10 +36,17 @@ class PlanReview(Base):
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )
     signature: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    signed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    signed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )

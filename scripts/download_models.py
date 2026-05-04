@@ -93,20 +93,52 @@ def download_dental_segmentator(output_dir: str):
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    url = "https://zenodo.org/records/10829675/files/Dataset112_DentalSegmentator_v100.zip"
+    zip_path = output_path / "Dataset112_DentalSegmentator_v100.zip"
+    extract_dir = output_path / "Dataset112_DentalSegmentator"
+
+    if extract_dir.exists():
+        logger.info("DentalSegmentator weights already downloaded and extracted.")
+        return
+
     logger.info("Downloading DentalSegmentator weights from Zenodo...")
-    logger.info("  Source: https://zenodo.org/records/11003568")
+    logger.info(f"  URL: {url}")
     logger.info("  License: Apache-2.0")
 
-    # TODO: Implement actual download with progress bar
-    # For now, create a placeholder indicating download is needed
-    manifest = output_path / "DOWNLOAD_INSTRUCTIONS.md"
-    manifest.write_text(
-        "# DentalSegmentator Model Weights\n\n"
-        "Download from: https://zenodo.org/records/11003568\n\n"
-        "Extract weights to this directory.\n\n"
-        "Reference: DCBIA-OrthoLab/SlicerAutomatedDentalTools\n"
-    )
-    logger.info(f"Download instructions written to {manifest}")
+    try:
+        import requests
+        from tqdm import tqdm
+    except ImportError:
+        logger.error("requests and tqdm required for download. Install with: pip install requests tqdm")
+        sys.exit(1)
+
+    # Download with progress bar
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+    total_size = int(response.headers.get('content-length', 0))
+
+    with open(zip_path, 'wb') as f, tqdm(
+        desc="Downloading",
+        total=total_size,
+        unit='B',
+        unit_scale=True,
+        unit_divisor=1024,
+    ) as bar:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+            bar.update(len(chunk))
+
+    # Extract zip
+    logger.info("Extracting weights...")
+    import zipfile
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(output_path)
+
+    # Clean up zip
+    zip_path.unlink()
+
+    logger.info(f"DentalSegmentator weights extracted to {extract_dir}")
+    logger.info("Ready for nnUNet inference.")
 
 
 def list_models():

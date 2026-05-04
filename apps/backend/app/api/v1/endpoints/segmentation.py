@@ -33,6 +33,14 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 logger = get_logger(__name__)
 
 
+def _normalize_fracture_fragments(raw_fragments: object) -> Optional[list[dict]]:
+    if isinstance(raw_fragments, list):
+        return [fragment for fragment in raw_fragments if isinstance(fragment, dict)] or None
+    if isinstance(raw_fragments, dict):
+        return [fragment for fragment in raw_fragments.values() if isinstance(fragment, dict)] or None
+    return None
+
+
 def _resolve_segmentation_request(
     model_name: str,
     run_dental_segmentation: bool,
@@ -510,7 +518,7 @@ def _to_schema(row: SegmentationModel) -> SegmentationResult:
         mask_storage_path=row.mask_storage_path,
         meshes=meshes or None,
         fragment_count=row.fragment_count,
-        fracture_fragments=list((row.fracture_fragments or {}).values()) or None,
+        fracture_fragments=_normalize_fracture_fragments(row.fracture_fragments),
         inference_time_ms=row.inference_time_ms,
         total_pipeline_time_ms=row.total_pipeline_time_ms,
         gpu_device=row.gpu_device,

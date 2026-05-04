@@ -188,7 +188,7 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
+    async with connectable.begin() as connection:
         # Verify connection is alive before proceeding
         await connection.execute(text("SELECT 1"))
 

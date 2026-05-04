@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc, Upload, FolderOpen, X, Layers, ClipboardCheck } from 'lucide-react'
+import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc, Upload, FolderOpen, X } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
 import StatusBadge from '../components/common/StatusBadge'
 import { ErrorState, EmptyState, TableSkeleton } from '../components/common/LoadingOverlay'
@@ -74,6 +74,32 @@ export default function CaseListPage() {
     sortOrder: sortDir,
   })
 
+  const displayItems = [...(data?.items ?? [])]
+    .filter((item) => {
+      if (!search.trim()) return true
+      const query = search.trim().toLowerCase()
+      return [
+        item.caseNumber,
+        item.patientId,
+        item.fractureClassification ?? '',
+        item.caseType,
+      ]
+        .some((value) => value.toLowerCase().includes(query))
+    })
+    .sort((a, b) => {
+      const direction = sortDir === 'asc' ? 1 : -1
+
+      if (sortKey === 'caseNumber') {
+        return a.caseNumber.localeCompare(b.caseNumber) * direction
+      }
+
+      if (sortKey === 'status') {
+        return a.status.localeCompare(b.status) * direction
+      }
+
+      return (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()) * direction
+    })
+
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
@@ -112,21 +138,21 @@ export default function CaseListPage() {
           <div className="hero-stat">
             <p className="hero-stat-label">Awaiting Segmentation</p>
             <p className="hero-stat-value">
-              {data.items.filter((item) => item.status === 'segmentation_in_progress' || item.status === 'segmentation_review').length}
+              {displayItems.filter((item) => item.status === 'segmentation_in_progress' || item.status === 'segmentation_review').length}
             </p>
             <p className="mt-2 text-sm text-slate-500">Cases still moving through structure generation and QC.</p>
           </div>
           <div className="hero-stat">
             <p className="hero-stat-label">In Planning</p>
             <p className="hero-stat-value">
-              {data.items.filter((item) => item.status === 'planning').length}
+              {displayItems.filter((item) => item.status === 'planning').length}
             </p>
             <p className="mt-2 text-sm text-slate-500">Cases actively being reduced, reviewed, or manually adjusted.</p>
           </div>
           <div className="hero-stat">
             <p className="hero-stat-label">Ready For Review</p>
             <p className="hero-stat-value">
-              {data.items.filter((item) => item.status === 'review' || item.status === 'approved').length}
+              {displayItems.filter((item) => item.status === 'review' || item.status === 'approved').length}
             </p>
             <p className="mt-2 text-sm text-slate-500">Plans that already have enough structure to support surgeon sign-off.</p>
           </div>
@@ -257,7 +283,7 @@ export default function CaseListPage() {
               <tbody>
                 {isLoading ? (
                   <TableSkeleton rows={8} cols={8} />
-                ) : data?.items.length === 0 ? (
+                ) : displayItems.length === 0 ? (
                   <tr>
                     <td colSpan={8}>
                       {hasActiveFilters ? (
@@ -285,7 +311,7 @@ export default function CaseListPage() {
                       )}
                     </td>
                   </tr>
-                ) : data?.items.map(c => (
+                ) : displayItems.map(c => (
                   <tr
                     key={c.id}
                     onClick={() => navigate(`/cases/${c.id}`)}

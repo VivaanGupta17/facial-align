@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Cpu, Check, X, AlertTriangle, ChevronDown, Loader2, GitCompare } from 'lucide-react'
+import { Cpu, Check, X, AlertTriangle, GitCompare } from 'lucide-react'
 import { usePlan, useGeneratePlan, usePlanVersions } from '../../hooks/usePlanning'
 import { useSegmentationResult } from '../../hooks/useSegmentation'
 import { usePlanningStore } from '../../stores/planningStore'

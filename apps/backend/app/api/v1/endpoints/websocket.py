@@ -55,6 +55,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.security import decode_token
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
@@ -408,17 +409,9 @@ def _validate_jwt(token: str) -> Optional[str]:
     Validate a JWT bearer token and return the user_id claim.
 
     Returns None if the token is invalid or expired.
-    In production, replace this stub with actual JWT verification using
-    app.core.security or python-jose.
     """
     try:
-        import jwt as pyjwt
-
-        payload = pyjwt.decode(
-            token,
-            settings.security.secret_key,
-            algorithms=[settings.security.algorithm],
-        )
+        payload = decode_token(token)
         return payload.get("sub")
     except Exception:
         return None

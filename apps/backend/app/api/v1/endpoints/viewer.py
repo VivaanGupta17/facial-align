@@ -20,6 +20,8 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.database import get_db_session
 from app.models.plan import ReductionPlan
 from app.models.segmentation import SegmentationResult
+from app.models.case_study import CaseStudy
+from app.models.study import ImagingStudy
 from app.schemas.common import BaseSchema, Vector3D
 
 router = APIRouter(prefix="/viewer", tags=["viewer"])
@@ -218,7 +220,7 @@ async def serve_stl_mesh(
 )
 async def get_volume_slices(
     case_id: uuid.UUID,
-    plane: str = Query("axial", regex="^(axial|coronal|sagittal)$"),
+    plane: str = Query("axial", pattern="^(axial|coronal|sagittal)$"),
     start_index: int = Query(0, ge=0),
     count: int = Query(10, ge=1, le=100),
     window_center: float = Query(400.0, description="Hounsfield unit window center (bone: 400)"),
@@ -230,19 +232,38 @@ async def get_volume_slices(
     Get metadata for CT volume cross-sections.
     Actual slice images are served via /viewer/slices/{case_id}/{plane}/{index}.webp
     """
-    # TODO: Query study volume dimensions from database
-    # For now return mock slice descriptors
+    study = (
+        await db.execute(
+            select(ImagingStudy)
+            .join(CaseStudy, CaseStudy.study_id == ImagingStudy.id)
+            .where(CaseStudy.case_id == case_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    
+    if not study:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Study not found for case")
+
+    meta = study.metadata_json or {}
+    # Default to standard CT parameters if missing
+    width = meta.get("Columns", 512)
+    height = meta.get("Rows", 512)
+    pixel_spacing = study.pixel_spacing_mm or 0.5
+    slice_thickness = study.slice_thickness_mm or 0.5
+    
+    max_slice = min(start_index + count, study.slice_count) if study.slice_count else start_index + count
+
     slices = []
-    for i in range(start_index, start_index + count):
+    for i in range(start_index, max_slice):
         slices.append(VolumeSlice(
             plane=plane,
             slice_index=i,
-            position_mm=float(i) * 0.5,
-            width=512,
-            height=512,
+            position_mm=float(i) * slice_thickness,
+            width=width,
+            height=height,
             window_center=window_center,
             window_width=window_width,
-            pixel_spacing_mm=[0.5, 0.5],
+            pixel_spacing_mm=[pixel_spacing, pixel_spacing],
             image_url=f"/api/v1/viewer/cases/{case_id}/slices/{plane}/{i}.webp"
             f"?wc={window_center}&ww={window_width}",
         ))
@@ -257,7 +278,6 @@ async def get_volume_slices(
 async def get_landmarks(
     case_id: uuid.UUID,
     landmark_type: Optional[str] = Query(None, description="Filter by type: cephalometric, surgical, dental"),
-    db: AsyncSession = Depends(get_db_session),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> List[LandmarkPoint]:
     """

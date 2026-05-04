@@ -27,6 +27,10 @@ def upgrade() -> None:
     )
     op.add_column(
         "segmentation_results",
+        sa.Column("structures", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.add_column(
+        "segmentation_results",
         sa.Column("fracture_fragments", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     )
     op.add_column(
@@ -85,16 +89,16 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("signature", sa.Text(), nullable=True),
-        sa.Column("signed_at", sa.DateTime(), nullable=True),
+        sa.Column("signed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.text("CURRENT_TIMESTAMP"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.text("CURRENT_TIMESTAMP"),
             nullable=False,
         ),
@@ -116,4 +120,5 @@ def downgrade() -> None:
 
     op.drop_column("segmentation_results", "fragment_mesh_paths")
     op.drop_column("segmentation_results", "fracture_fragments")
+    op.drop_column("segmentation_results", "structures")
     op.drop_column("segmentation_results", "provenance")

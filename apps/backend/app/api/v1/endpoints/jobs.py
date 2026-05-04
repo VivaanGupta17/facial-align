@@ -34,10 +34,11 @@ from typing import Any, Dict, List, Optional
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.schemas.common import BaseSchema
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -106,7 +107,7 @@ def _celery_state_to_job_status(celery_state: str) -> JobStatus:
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 
-class JobProgress(BaseModel):
+class JobProgress(BaseSchema):
     """Granular progress information emitted by long-running pipeline tasks."""
 
     percent: float = Field(default=0.0, ge=0.0, le=100.0, description="Completion percentage")
@@ -119,7 +120,7 @@ class JobProgress(BaseModel):
     )
 
 
-class JobStatusResponse(BaseModel):
+class JobStatusResponse(BaseSchema):
     """Full job status record returned by GET /jobs/{job_id}."""
 
     job_id: str = Field(description="Celery task UUID")
@@ -164,7 +165,7 @@ class JobStatusResponse(BaseModel):
     )
 
 
-class JobLogEntry(BaseModel):
+class JobLogEntry(BaseSchema):
     """A single structured log line emitted by a pipeline task."""
 
     timestamp: datetime
@@ -174,7 +175,7 @@ class JobLogEntry(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
-class JobLogsResponse(BaseModel):
+class JobLogsResponse(BaseSchema):
     """Response schema for GET /jobs/{job_id}/logs."""
 
     job_id: str
@@ -182,7 +183,7 @@ class JobLogsResponse(BaseModel):
     entries: List[JobLogEntry]
 
 
-class JobCancelResponse(BaseModel):
+class JobCancelResponse(BaseSchema):
     """Response schema for POST /jobs/{job_id}/cancel."""
 
     job_id: str
@@ -190,7 +191,7 @@ class JobCancelResponse(BaseModel):
     message: str
 
 
-class JobListResponse(BaseModel):
+class JobListResponse(BaseSchema):
     """Response schema for GET /jobs list endpoint."""
 
     total: int

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   FolderOpen, Upload, BoxSelect, Plus, TrendingUp, TrendingDown,
-  Clock, CheckCircle, Cpu, HardDrive, Activity, Layers, RefreshCw,
+  Clock, CheckCircle, HardDrive, Activity, Layers, RefreshCw,
   X, AlertCircle, Sparkles, ShieldCheck, FlaskConical,
 } from 'lucide-react'
 import { dashboardApi, casesApi } from '../lib/api'
@@ -214,7 +214,6 @@ function summarizeCapabilities(capabilities: CapabilityInfo[] | undefined) {
 // ---------------------------
 export default function DashboardPage() {
   const navigate = useNavigate()
-  const qc = useQueryClient()
   const [statsErrorDismissed, setStatsErrorDismissed] = useState(false)
   const [healthErrorDismissed, setHealthErrorDismissed] = useState(false)
 
@@ -404,7 +403,7 @@ export default function DashboardPage() {
                   key={a.label}
                   onClick={() => navigate(a.to)}
                   className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[rgba(8,16,29,0.62)] p-3 text-left transition-all hover:border-cyan-400/20 hover:bg-[rgba(11,19,33,0.88)]"
-                  data-testid={`quick-action-${a.label.toLowerCase().replace(' ', '-')}`}
+                  data-testid={`quick-action-${a.label.toLowerCase().replace(/\s+/g, '-')}`}
                 >
                   <span className="rounded-2xl bg-[rgba(34,211,238,0.08)] p-2 text-cyan-300">{a.icon}</span>
                   <div>

@@ -293,7 +293,7 @@ function lerp(a: number, b: number, t: number): number {
 
 /** Lerp angles taking the shortest path through ±180°. */
 function lerpAngleDeg(a: number, b: number, t: number): number {
-  let diff = ((b - a) % 360 + 540) % 360 - 180
+  const diff = ((b - a) % 360 + 540) % 360 - 180
   return a + diff * t
 }
 

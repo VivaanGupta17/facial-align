@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { RotateCcw, Cpu, Check, X, Undo2, Redo2, Lock, Unlock, Move3d, Save, XCircle } from 'lucide-react'
+import { RotateCcw, Cpu, Check, Undo2, Redo2, Lock, Unlock, Move3d, Save, XCircle } from 'lucide-react'
 import { usePlanningStore } from '../../stores/planningStore'
 import { planningApi } from '../../lib/api'
 import { ConfidenceBadge } from '../common/ConfidenceBar'
@@ -132,7 +132,22 @@ export default function FragmentControls() {
       saved[fragment.fragmentId] = { ...fragment }
     })
     setLastSavedTransforms(saved)
-  }, [currentPlan?.id])
+  }, [currentPlan])
+
+  const currentPlanId = currentPlan?.id
+  const debouncedSave = useCallback((fragmentId: string, transform: Transform3D) => {
+    if (!currentPlanId) return
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+    }
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        await planningApi.updateFragmentTransform(currentPlanId, fragmentId, transform)
+      } catch {
+        // Auto-save failures are silent — user can still explicitly save
+      }
+    }, 500)
+  }, [currentPlanId])
 
   useEffect(() => {
     return () => {
@@ -157,20 +172,6 @@ export default function FragmentControls() {
 
   const t = fragment.currentTransform
   const hasSuggestion = !!fragment.suggestedTransform
-
-  // Debounced auto-save to backend
-  const debouncedSave = useCallback((fragmentId: string, transform: Transform3D) => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current)
-    }
-    debounceTimerRef.current = setTimeout(async () => {
-      try {
-        await planningApi.updateFragmentTransform(currentPlan.id, fragmentId, transform)
-      } catch {
-        // Auto-save failures are silent — user can still explicitly save
-      }
-    }, 500)
-  }, [currentPlan.id])
 
   const updateTranslation = (axis: 'x' | 'y' | 'z', val: number) => {
     if (!fragment || fragment.isLocked) return

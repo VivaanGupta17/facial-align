@@ -43,6 +43,21 @@ router = APIRouter(prefix="/planning", tags=["planning"])
 logger = get_logger(__name__)
 
 
+def _coerce_fragment_label(value: object, default: int = 0) -> int:
+    """Accept legacy string labels in seeded/test data without breaking the API."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return default
+
+
 def _resolve_planning_model(requested_model_name: str) -> tuple[str, dict]:
     """Resolve a planning request to an actual executable algorithm path."""
 
@@ -84,9 +99,17 @@ def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
     fragments = None
     if row.fragments:
         fragments = {
-            fid: FragmentInfo(fragment_id=fid, fragment_label=data.get("label", 0), **{
-                k: v for k, v in data.items() if k in FragmentInfo.model_fields
-            })
+            fid: FragmentInfo(
+                fragment_id=fid,
+                fragment_label=_coerce_fragment_label(
+                    data.get("fragment_label", data.get("label")),
+                ),
+                **{
+                    k: v
+                    for k, v in data.items()
+                    if k in FragmentInfo.model_fields and k not in {"fragment_id", "fragment_label"}
+                },
+            )
             for fid, data in row.fragments.items()
         }
 
@@ -95,7 +118,7 @@ def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
         transforms = [
             FragmentTransform(
                 fragment_id=fid,
-                fragment_label=data.get("fragment_label", 0),
+                fragment_label=_coerce_fragment_label(data.get("fragment_label")),
                 transform=data["transform"],
                 confidence=data.get("confidence", 0.0),
             )
@@ -116,6 +139,27 @@ def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
         except Exception:
             pass
 
+    provenance = row.provenance
+    if provenance:
+        provenance = build_provenance(
+            algorithm_used=provenance.get("algorithm_used")
+            or provenance.get("algorithmUsed")
+            or row.model_name
+            or "baseline_icp",
+            validation_tier=provenance.get("validation_tier")
+            or provenance.get("validationTier")
+            or "deterministic_baseline",
+            beta_status=provenance.get("beta_status")
+            or provenance.get("betaStatus")
+            or "not_beta",
+            warnings=provenance.get("warnings") or [],
+            fallback_reason=provenance.get("fallback_reason")
+            or provenance.get("fallbackReason"),
+            model_version=provenance.get("model_version")
+            or provenance.get("modelVersion")
+            or row.model_version,
+        )
+
     return ReductionPlanResponse(
         id=row.id,
         case_id=row.case_id,
@@ -128,9 +172,9 @@ def _to_plan_response(row: ReductionPlanModel) -> ReductionPlanResponse:
         fragment_transforms=transforms,
         occlusal_constraints=occlusal_constraints,
         occlusal_metrics=occlusal_metrics,
-        provenance=row.provenance,
+        provenance=provenance,
         confidence_score=row.confidence_score,
-        surgeon_approved=row.surgeon_approved,
+        surgeon_approved=bool(row.surgeon_approved),
         surgeon_notes=row.surgeon_notes,
         parent_plan_id=row.parent_plan_id,
         is_ml_generated=row.is_ml_generated,
@@ -847,7 +891,7 @@ async def export_plan_stl(
             )
     else:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Unknown export_type: {export_request.export_type}",
         )
 

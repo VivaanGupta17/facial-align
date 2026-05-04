@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Integer, String, Text, text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,10 +28,14 @@ class Patient(Base):
     age_at_registration: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sex: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        server_default=text("CURRENT_TIMESTAMP"), nullable=False
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
     )
     created_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(

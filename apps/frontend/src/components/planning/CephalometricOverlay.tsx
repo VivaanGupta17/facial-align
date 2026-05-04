@@ -180,14 +180,6 @@ const GROUP_COLORS: Record<MeasurementGroup, string> = {
 }
 
 // =============================================================================
-// SVG line styles per measurement group
-// =============================================================================
-
-function getLandmarkStroke(group: MeasurementGroup): string {
-  return GROUP_COLORS[group] + 'aa'
-}
-
-// =============================================================================
 // Props
 // =============================================================================
 
@@ -369,10 +361,6 @@ function CephalometricSVG({
       {measurements.map(m => {
         if (!m.linePoints) return null
         const selected = selectedMeasurementId === m.id
-        const status = getClinicalStatus(m)
-        const stroke = selected
-          ? STATUS_COLORS[status].dot.replace('bg-', '#').replace('-400', '') + 'ff'
-          : GROUP_COLORS[m.group] + (selected ? 'ff' : '88')
 
         return m.linePoints.map((pair, i) => {
           const ptA = LANDMARK_MAP[pair[0]]

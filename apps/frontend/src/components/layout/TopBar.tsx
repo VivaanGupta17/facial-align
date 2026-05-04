@@ -1,4 +1,4 @@
-import { useLocation, useNavigate, Link } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ChevronRight, Cpu, CheckCircle, RefreshCw, Bell, User, Settings, LogOut, FlaskConical, ShieldCheck } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'

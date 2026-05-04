@@ -18,8 +18,21 @@ export default function ModelsPage() {
     staleTime: 30_000,
   })
 
-  if (isLoading) return <PageLoading label="Loading capability registry..." />
-  if (error || !health) return <ErrorState description="Failed to load model and capability information" />
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 flex-col p-6 animate-fade-in" data-testid="models-page">
+        <PageLoading label="Loading capability registry..." />
+      </div>
+    )
+  }
+
+  if (error || !health) {
+    return (
+      <div className="flex flex-1 flex-col p-6 animate-fade-in" data-testid="models-page">
+        <ErrorState description="Failed to load model and capability information" />
+      </div>
+    )
+  }
 
   const capabilities = health.capabilities
   const readyCount = capabilities.filter((capability) => capability.status === 'available').length
