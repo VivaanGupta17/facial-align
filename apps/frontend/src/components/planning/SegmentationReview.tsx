@@ -2,6 +2,7 @@ import { Check, X, RefreshCw, AlertTriangle, Cpu, Clock, Zap } from 'lucide-reac
 import { useSegmentationResult, useApproveStructure, useRejectStructure, useRequestResegmentation } from '../../hooks/useSegmentation'
 import ConfidenceBar, { ConfidenceRing } from '../common/ConfidenceBar'
 import { PageLoading, ErrorState } from '../common/LoadingOverlay'
+import { ProvenanceCard } from '../common/TrustIndicators'
 import Viewer3D from '../viewer/Viewer3D'
 import { useViewerStore } from '../../stores/viewerStore'
 import { casesApi } from '../../lib/api'
@@ -166,9 +167,9 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
       </div>
 
       {/* Right: Review panel */}
-      <div className="w-[400px] shrink-0 flex flex-col border-l border-slate-800 bg-slate-900" data-testid="segmentation-panel">
+      <div className="w-[400px] shrink-0 flex flex-col border-l border-white/10 bg-[rgba(8,14,26,0.84)] backdrop-blur-xl" data-testid="segmentation-panel">
         {/* Model info header */}
-        <div className="p-4 border-b border-slate-800 bg-slate-900">
+        <div className="p-4 border-b border-white/10">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Cpu size={15} className="text-cyan-400" />
@@ -220,6 +221,10 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
           </div>
         </div>
 
+        <div className="p-4 border-b border-white/10">
+          <ProvenanceCard provenance={segResult.provenance} title="Segmentation Provenance" />
+        </div>
+
         {/* Warnings */}
         {segResult.warnings.length > 0 && (
           <div className="px-4 py-2 bg-amber-950/40 border-b border-amber-900/50" data-testid="segmentation-warnings">
@@ -247,7 +252,7 @@ export default function SegmentationReview({ caseId }: SegmentationReviewProps) 
         </div>
 
         {/* Footer actions */}
-        <div className="p-4 border-t border-slate-800 space-y-2" data-testid="segmentation-actions">
+        <div className="p-4 border-t border-white/10 space-y-2" data-testid="segmentation-actions">
           {!allAccepted && (
             <button
               onClick={handleAcceptAll}

@@ -112,6 +112,7 @@ export default function FragmentControls() {
     undo,
     redo,
     markSaved,
+    toggleFragmentLock,
   } = usePlanningStore()
 
   const [activeSection, setActiveSection] = useState<'translate' | 'rotate'>('translate')
@@ -119,6 +120,27 @@ export default function FragmentControls() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [lastSavedTransforms, setLastSavedTransforms] = useState<Record<string, FragmentTransform> | null>(null)
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!currentPlan) {
+      setLastSavedTransforms(null)
+      return
+    }
+
+    const saved: Record<string, FragmentTransform> = {}
+    currentPlan.fragmentTransforms.forEach((fragment: FragmentTransform) => {
+      saved[fragment.fragmentId] = { ...fragment }
+    })
+    setLastSavedTransforms(saved)
+  }, [currentPlan?.id])
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+      }
+    }
+  }, [])
 
   if (!currentPlan || !selectedFragmentId) {
     return (
@@ -132,15 +154,6 @@ export default function FragmentControls() {
 
   const fragment = currentPlan.fragmentTransforms.find((f: FragmentTransform) => f.fragmentId === selectedFragmentId)
   if (!fragment) return null
-
-  // Store last saved state on first render
-  if (!lastSavedTransforms) {
-    const saved: Record<string, FragmentTransform> = {}
-    currentPlan.fragmentTransforms.forEach((f: FragmentTransform) => {
-      saved[f.fragmentId] = { ...f }
-    })
-    setLastSavedTransforms(saved)
-  }
 
   const t = fragment.currentTransform
   const hasSuggestion = !!fragment.suggestedTransform
@@ -215,6 +228,7 @@ export default function FragmentControls() {
     if (!lastSavedTransforms || !lastSavedTransforms[selectedFragmentId]) return
     const savedFragment = lastSavedTransforms[selectedFragmentId]
     updateFragmentTransform(selectedFragmentId, savedFragment.currentTransform, 'reset')
+    markSaved()
   }
 
   return (
@@ -230,11 +244,11 @@ export default function FragmentControls() {
             )}
           </div>
           {fragment.isLocked ? (
-            <button className="btn-icon" title="Unlock fragment" data-testid="unlock-fragment">
+            <button onClick={() => toggleFragmentLock(fragment.fragmentId)} className="btn-icon" title="Unlock fragment" data-testid="unlock-fragment">
               <Lock size={13} />
             </button>
           ) : (
-            <button className="btn-icon" title="Lock fragment" data-testid="lock-fragment">
+            <button onClick={() => toggleFragmentLock(fragment.fragmentId)} className="btn-icon" title="Lock fragment" data-testid="lock-fragment">
               <Unlock size={13} />
             </button>
           )}

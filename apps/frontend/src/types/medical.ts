@@ -78,6 +78,29 @@ export interface BoundingBox {
   center: Vector3
 }
 
+export interface ProvenanceInfo {
+  algorithmUsed: string
+  validationTier: string
+  betaStatus: string
+  warnings: string[]
+  fallbackReason?: string | null
+  modelVersion?: string | null
+}
+
+export interface CapabilityInfo {
+  name: string
+  category: string
+  status: 'available' | 'degraded' | 'unavailable'
+  baselineAvailable: boolean
+  learnedAvailable: boolean
+  artifactRequired: boolean
+  artifactReady: boolean
+  validationTier: string
+  betaStatus: string
+  modelVersion?: string | null
+  warnings: string[]
+}
+
 // ---------------------------
 // Patient & Study
 // ---------------------------
@@ -237,6 +260,7 @@ export interface SegmentationResult {
   structures: SegmentedStructure[]
   overallConfidence: ConfidenceScore
   warnings: string[]
+  provenance: ProvenanceInfo | null
   createdAt: string
   completedAt: string
   gpuUsed: string
@@ -264,6 +288,7 @@ export interface TransformHistoryEntry {
   id: string
   fragmentId: string
   transform: Transform3D
+  previousTransform?: Transform3D
   timestamp: string
   source: 'manual' | 'ai_suggestion' | 'reset'
   description: string
@@ -320,6 +345,7 @@ export interface ReductionPlan {
   aiConfidence: number
   aiRecommendation: string
   isApproved: boolean
+  provenance: ProvenanceInfo | null
   createdAt: string
   updatedAt: string
   createdBy: string
@@ -423,8 +449,14 @@ export interface ModelInfo {
   name: string
   version: string
   type: 'segmentation' | 'planning' | 'occlusion'
+  status: 'available' | 'degraded' | 'unavailable'
+  validationTier: string
+  betaStatus: string
+  baselineAvailable: boolean
+  learnedAvailable: boolean
+  artifactReady: boolean
+  warnings: string[]
   lastUpdated: string
-  accuracy: number
 }
 
 export interface QueueStatus {
@@ -436,6 +468,7 @@ export interface QueueStatus {
 export interface SystemHealth {
   gpus: GpuStatus[]
   models: ModelInfo[]
+  capabilities: CapabilityInfo[]
   queue: QueueStatus
   apiLatencyMs: number
   storageUsedGb: number

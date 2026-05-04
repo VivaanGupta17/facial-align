@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc, Upload, FolderOpen, X } from 'lucide-react'
+import { Search, Filter, Calendar, ChevronDown, ChevronUp, Plus, SortAsc, SortDesc, Upload, FolderOpen, X, Layers, ClipboardCheck } from 'lucide-react'
 import { useCases } from '../hooks/useCases'
 import StatusBadge from '../components/common/StatusBadge'
 import { ErrorState, EmptyState, TableSkeleton } from '../components/common/LoadingOverlay'
+import PageHeader from '../components/common/PageHeader'
 import type { CaseStatus, CaseType } from '../types/medical'
 
 const STATUS_OPTIONS: { value: CaseStatus | ''; label: string }[] = [
@@ -85,24 +86,55 @@ export default function CaseListPage() {
 
   return (
     <div className="p-6 space-y-4 animate-fade-in" data-testid="case-list-page">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-slate-100">Cases</h1>
-          {data && <p className="text-sm text-slate-400 mt-0.5">{data.total} total</p>}
+      <PageHeader
+        eyebrow="Case Management"
+        title="Cases"
+        description="Browse the active fracture-planning workload, filter by workflow state, and jump directly into segmentation, planning, or review."
+        chips={[
+          { label: `${data?.total ?? 0} total cases`, tone: 'neutral', icon: <FolderOpen size={12} /> },
+          { label: `${hasActiveFilters ? 'Filters active' : 'All cases visible'}`, tone: hasActiveFilters ? 'info' : 'neutral', icon: <Search size={12} /> },
+          { label: `Page ${page}`, tone: 'neutral' },
+        ]}
+        actions={
+          <button
+            onClick={() => navigate('/upload')}
+            className="flex items-center gap-2 btn-primary"
+            data-testid="new-case-btn"
+          >
+            <Plus size={15} />
+            New Case
+          </button>
+        }
+      />
+
+      {data && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="hero-stat">
+            <p className="hero-stat-label">Awaiting Segmentation</p>
+            <p className="hero-stat-value">
+              {data.items.filter((item) => item.status === 'segmentation_in_progress' || item.status === 'segmentation_review').length}
+            </p>
+            <p className="mt-2 text-sm text-slate-500">Cases still moving through structure generation and QC.</p>
+          </div>
+          <div className="hero-stat">
+            <p className="hero-stat-label">In Planning</p>
+            <p className="hero-stat-value">
+              {data.items.filter((item) => item.status === 'planning').length}
+            </p>
+            <p className="mt-2 text-sm text-slate-500">Cases actively being reduced, reviewed, or manually adjusted.</p>
+          </div>
+          <div className="hero-stat">
+            <p className="hero-stat-label">Ready For Review</p>
+            <p className="hero-stat-value">
+              {data.items.filter((item) => item.status === 'review' || item.status === 'approved').length}
+            </p>
+            <p className="mt-2 text-sm text-slate-500">Plans that already have enough structure to support surgeon sign-off.</p>
+          </div>
         </div>
-        <button
-          onClick={() => navigate('/upload')}
-          className="flex items-center gap-2 btn-primary"
-          data-testid="new-case-btn"
-        >
-          <Plus size={15} />
-          New Case
-        </button>
-      </div>
+      )}
 
       {/* Search + Filter bar */}
-      <div className="bg-slate-800 border border-slate-700 rounded-lg p-3" data-testid="filter-bar">
+      <div className="surface-card p-3" data-testid="filter-bar">
         <div className="flex gap-2">
           {/* Search */}
           <div className="relative flex-1">
@@ -192,7 +224,7 @@ export default function CaseListPage() {
       </div>
 
       {/* Table */}
-      <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden" data-testid="cases-table">
+      <div className="surface-card overflow-hidden" data-testid="cases-table">
         {error ? (
           <ErrorState description="Failed to load cases" onRetry={refetch} />
         ) : (

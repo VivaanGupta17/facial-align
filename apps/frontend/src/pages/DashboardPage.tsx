@@ -4,12 +4,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   FolderOpen, Upload, BoxSelect, Plus, TrendingUp, TrendingDown,
   Clock, CheckCircle, Cpu, HardDrive, Activity, Layers, RefreshCw,
-  X, AlertCircle, Sparkles,
+  X, AlertCircle, Sparkles, ShieldCheck, FlaskConical,
 } from 'lucide-react'
 import { dashboardApi, casesApi } from '../lib/api'
 import StatusBadge from '../components/common/StatusBadge'
 import { Skeleton } from '../components/common/LoadingOverlay'
-import type { CaseListItem, GpuStatus } from '../types/medical'
+import PageHeader from '../components/common/PageHeader'
+import { CapabilityBadge } from '../components/common/TrustIndicators'
+import type { CapabilityInfo, CaseListItem, GpuStatus } from '../types/medical'
 
 // ---------------------------
 // Format helpers
@@ -197,6 +199,16 @@ function RefreshButton({ onClick, className = '' }: { onClick: () => void; class
   )
 }
 
+function summarizeCapabilities(capabilities: CapabilityInfo[] | undefined) {
+  const all = capabilities ?? []
+  return {
+    total: all.length,
+    ready: all.filter((capability) => capability.status === 'available').length,
+    degraded: all.filter((capability) => capability.status === 'degraded').length,
+    warnings: all.reduce((count, capability) => count + capability.warnings.length, 0),
+  }
+}
+
 // ---------------------------
 // Main Dashboard
 // ---------------------------
@@ -225,6 +237,7 @@ export default function DashboardPage() {
   })
 
   const zeroCases = !casesLoading && recentCasesData && recentCasesData.length === 0
+  const capabilitySummary = summarizeCapabilities(health?.capabilities)
 
   return (
     <div className="p-6 space-y-6 max-w-screen-2xl mx-auto animate-fade-in" data-testid="dashboard-page">
@@ -245,15 +258,28 @@ export default function DashboardPage() {
         />
       )}
 
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-slate-100">Surgical Command Center</h1>
-          <p className="text-sm text-slate-400 mt-0.5">
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-          </p>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        eyebrow="Clinical Workflow"
+        title="Surgical Command Center"
+        description="Track upload, segmentation, planning, and review in one place. Every workflow card below is tuned to show real system readiness instead of placeholder model confidence."
+        chips={[
+          {
+            label: `${capabilitySummary.ready}/${capabilitySummary.total || 0} capabilities ready`,
+            tone: capabilitySummary.degraded > 0 ? 'warning' : 'success',
+            icon: capabilitySummary.degraded > 0 ? <FlaskConical size={12} /> : <ShieldCheck size={12} />,
+          },
+          {
+            label: `${capabilitySummary.warnings} active warnings`,
+            tone: capabilitySummary.warnings > 0 ? 'warning' : 'neutral',
+            icon: <AlertCircle size={12} />,
+          },
+          {
+            label: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+            tone: 'neutral',
+          },
+        ]}
+        actions={
+          <div className="flex gap-2">
           <button
             onClick={() => navigate('/upload')}
             className="flex items-center gap-2 btn-secondary"
@@ -270,14 +296,15 @@ export default function DashboardPage() {
             <Plus size={15} />
             New Case
           </button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Stats row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="stats-row">
         {statsLoading ? (
           Array(4).fill(0).map((_, i) => (
-            <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div key={i} className="surface-card p-4">
               <Skeleton className="h-3 w-24 mb-3" />
               <Skeleton className="h-8 w-16 mb-2" />
               <Skeleton className="h-3 w-20" />
@@ -324,7 +351,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
         {/* Recent cases (2/3 width) */}
-        <div className="xl:col-span-2 bg-slate-800 border border-slate-700 rounded-lg" data-testid="recent-cases-panel">
+        <div className="xl:col-span-2 surface-card overflow-hidden" data-testid="recent-cases-panel">
           <div className="panel-header">
             <div className="flex items-center gap-2">
               <FolderOpen size={15} className="text-cyan-400" />
@@ -363,7 +390,7 @@ export default function DashboardPage() {
         <div className="space-y-4">
 
           {/* Quick actions */}
-          <div className="bg-slate-800 border border-slate-700 rounded-lg" data-testid="quick-actions-panel">
+          <div className="surface-card overflow-hidden" data-testid="quick-actions-panel">
             <div className="panel-header">
               <h2 className="panel-title">Quick Actions</h2>
             </div>
@@ -376,10 +403,10 @@ export default function DashboardPage() {
                 <button
                   key={a.label}
                   onClick={() => navigate(a.to)}
-                  className="flex items-center gap-3 p-3 rounded-md bg-slate-900 hover:bg-slate-750 border border-slate-700 hover:border-slate-600 transition-all text-left"
+                  className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[rgba(8,16,29,0.62)] p-3 text-left transition-all hover:border-cyan-400/20 hover:bg-[rgba(11,19,33,0.88)]"
                   data-testid={`quick-action-${a.label.toLowerCase().replace(' ', '-')}`}
                 >
-                  <span className="p-2 rounded bg-slate-800 text-cyan-400">{a.icon}</span>
+                  <span className="rounded-2xl bg-[rgba(34,211,238,0.08)] p-2 text-cyan-300">{a.icon}</span>
                   <div>
                     <p className="text-sm font-medium text-slate-200">{a.label}</p>
                     <p className="text-xs text-slate-500">{a.sub}</p>
@@ -390,7 +417,7 @@ export default function DashboardPage() {
           </div>
 
           {/* System health */}
-          <div className="bg-slate-800 border border-slate-700 rounded-lg" data-testid="system-health-panel">
+          <div className="surface-card overflow-hidden" data-testid="system-health-panel">
             <div className="panel-header">
               <div className="flex items-center gap-2">
                 <Activity size={15} className="text-emerald-400" />
@@ -425,7 +452,7 @@ export default function DashboardPage() {
                   </div>
 
                   {/* Queue */}
-                  <div className="flex items-center justify-between p-2.5 rounded bg-slate-900 border border-slate-700">
+                  <div className="surface-card-muted flex items-center justify-between p-3">
                     <div className="flex items-center gap-2">
                       <Clock size={13} className="text-slate-400" />
                       <span className="text-xs text-slate-300">Inference Queue</span>
@@ -440,7 +467,7 @@ export default function DashboardPage() {
                   </div>
 
                   {/* Storage */}
-                  <div className="p-2.5 rounded bg-slate-900 border border-slate-700">
+                  <div className="surface-card-muted p-3">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <HardDrive size={13} className="text-slate-400" />
@@ -458,21 +485,24 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  {/* Models */}
+                  {/* Capabilities */}
                   <div>
-                    <p className="label-xs mb-2">AI Models</p>
-                    <div className="space-y-1.5">
-                      {health.models.map(m => (
-                        <div key={m.name} className="flex items-center justify-between text-xs" data-testid={`model-row-${m.name}`}>
-                          <div className="flex items-center gap-2">
-                            <Cpu size={11} className="text-slate-500" />
-                            <span className="text-slate-300">{m.name}</span>
-                            <span className="font-mono text-slate-500">v{m.version}</span>
-                          </div>
-                          <span className="font-mono text-emerald-400">{Math.round(m.accuracy * 100)}%</span>
-                        </div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="label-xs">Workflow Capabilities</p>
+                      <span className="text-[11px] uppercase tracking-[0.18em] text-slate-600">
+                        Provenance-aware
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {health.capabilities.slice(0, 6).map((capability) => (
+                        <CapabilityBadge key={capability.name} capability={capability} compact />
                       ))}
                     </div>
+                    {health.capabilities.length > 6 && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        {health.capabilities.length - 6} additional subsystem checks available in Models and Compute.
+                      </p>
+                    )}
                   </div>
                 </>
               ) : null}
@@ -506,7 +536,7 @@ function StatCard({
 
   return (
     <div
-      className={`border rounded-lg p-4 ${c.bg} ${onClick ? 'cursor-pointer hover:brightness-110 transition-all' : ''}`}
+      className={`rounded-[28px] border p-4 ${c.bg} ${onClick ? 'cursor-pointer transition-all hover:-translate-y-0.5 hover:brightness-110' : ''}`}
       onClick={onClick}
       data-testid={`stat-card-${label.toLowerCase().replace(' ', '-')}`}
     >

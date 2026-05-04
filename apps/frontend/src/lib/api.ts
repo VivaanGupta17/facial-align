@@ -6,6 +6,7 @@
 import type {
   AngleClass,
   BoundingBox,
+  CapabilityInfo,
   CaseListItem,
   CaseStatus,
   CaseStudyInfo,
@@ -14,6 +15,7 @@ import type {
   FragmentTransform as UiFragmentTransform,
   OcclusalConstraints,
   PaginatedResponse,
+  ProvenanceInfo,
   ReductionPlan,
   ReviewChecklist,
   SegmentationResult,
@@ -212,6 +214,21 @@ function makeBoundingBox(bounds?: BackendBoundingBox | null): BoundingBox {
       y: (min.y + max.y) / 2,
       z: (min.z + max.z) / 2,
     },
+  }
+}
+
+function mapProvenanceInfo(
+  provenance?: BackendProvenanceInfo | null
+): ProvenanceInfo | null {
+  if (!provenance) return null
+
+  return {
+    algorithmUsed: provenance.algorithmUsed,
+    validationTier: provenance.validationTier,
+    betaStatus: provenance.betaStatus,
+    warnings: provenance.warnings ?? [],
+    fallbackReason: provenance.fallbackReason ?? null,
+    modelVersion: provenance.modelVersion ?? null,
   }
 }
 
@@ -564,6 +581,7 @@ function mapSegmentationResult(result: BackendSegmentationResult): SegmentationR
       passesClinicalThreshold: overallConfidence >= 0.75,
     },
     warnings,
+    provenance: mapProvenanceInfo(result.provenance),
     createdAt: result.createdAt,
     completedAt: result.completedAt ?? result.createdAt,
     gpuUsed: result.gpuDevice ?? 'Unavailable',
@@ -703,6 +721,7 @@ function mapPlanResponse(plan: BackendReductionPlanResponse): ReductionPlan {
     aiConfidence: safeNumber(plan.confidenceScore, 0.75),
     aiRecommendation: plan.provenance?.warnings?.[0] ?? 'Review the proposed reduction and confirm each fragment position.',
     isApproved: plan.surgeonApproved,
+    provenance: mapProvenanceInfo(plan.provenance),
     createdAt: plan.createdAt,
     updatedAt: plan.approvedAt ?? plan.createdAt,
     createdBy: plan.approvedBy ?? 'system',
@@ -990,7 +1009,15 @@ interface BackendReviewResponse {
 interface BackendCapabilityEntry {
   name: string
   category: string
+  status: 'available' | 'degraded' | 'unavailable'
+  baselineAvailable: boolean
+  learnedAvailable: boolean
+  artifactRequired: boolean
+  artifactReady: boolean
+  validationTier: string
+  betaStatus: string
   modelVersion?: string | null
+  warnings?: string[] | null
 }
 
 interface BackendCapabilitiesResponse {
@@ -1212,6 +1239,20 @@ export const dashboardApi = {
       fetchApi<BackendCapabilitiesResponse>('/capabilities'),
     ])
 
+    const capabilityEntries: CapabilityInfo[] = capabilities.capabilities.map((capability) => ({
+      name: capability.name,
+      category: capability.category,
+      status: capability.status,
+      baselineAvailable: capability.baselineAvailable,
+      learnedAvailable: capability.learnedAvailable,
+      artifactRequired: capability.artifactRequired,
+      artifactReady: capability.artifactReady,
+      validationTier: capability.validationTier,
+      betaStatus: capability.betaStatus,
+      modelVersion: capability.modelVersion ?? null,
+      warnings: capability.warnings ?? [],
+    }))
+
     return {
       gpus: health.gpuDevices.map((name, index) => ({
         id: String(index),
@@ -1230,9 +1271,16 @@ export const dashboardApi = {
           : capability.category === 'planning'
           ? 'planning'
           : 'occlusion',
+        status: capability.status,
+        validationTier: capability.validationTier,
+        betaStatus: capability.betaStatus,
+        baselineAvailable: capability.baselineAvailable,
+        learnedAvailable: capability.learnedAvailable,
+        artifactReady: capability.artifactReady,
+        warnings: capability.warnings ?? [],
         lastUpdated: health.timestamp,
-        accuracy: 0,
       })),
+      capabilities: capabilityEntries,
       queue: {
         depth: 0,
         estimatedWaitMinutes: 0,

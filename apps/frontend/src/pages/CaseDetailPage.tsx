@@ -456,8 +456,8 @@ export default function CaseDetailPage() {
       )}
 
       {/* Case header */}
-      <div className="px-6 py-4 bg-slate-900 border-b border-slate-800">
-        <div className="flex items-center gap-4">
+      <div className="border-b border-white/10 bg-[rgba(8,14,26,0.72)] px-6 py-4 backdrop-blur-xl">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             onClick={() => navigate('/cases')}
             className="btn-icon"
@@ -485,16 +485,35 @@ export default function CaseDetailPage() {
           </div>
         </div>
 
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div className="surface-card-muted px-4 py-3">
+            <p className="micro-label">Segmentations</p>
+            <p className="mt-1 text-lg font-semibold text-slate-100">{caseData.segmentationCount}</p>
+          </div>
+          <div className="surface-card-muted px-4 py-3">
+            <p className="micro-label">Plans</p>
+            <p className="mt-1 text-lg font-semibold text-slate-100">{caseData.planCount}</p>
+          </div>
+          <div className="surface-card-muted px-4 py-3">
+            <p className="micro-label">Fracture Class</p>
+            <p className="mt-1 text-sm font-medium text-slate-200">{caseData.fractureClassification ?? 'Not classified'}</p>
+          </div>
+          <div className="surface-card-muted px-4 py-3">
+            <p className="micro-label">Latest Plan</p>
+            <p className="mt-1 text-sm font-medium text-slate-200">{caseData.latestPlan ? truncateId(caseData.latestPlan) : 'Not generated'}</p>
+          </div>
+        </div>
+
         {/* Tabs */}
-        <div className="flex gap-1 mt-4" data-testid="case-tabs">
+        <div className="mt-4 flex flex-wrap gap-2" data-testid="case-tabs">
           {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                 activeTab === tab.id
-                  ? 'bg-cyan-950 text-cyan-400 border border-cyan-900'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  ? 'border border-cyan-400/20 bg-[rgba(12,74,110,0.26)] text-cyan-300'
+                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
               }`}
               data-testid={`tab-${tab.id}`}
             >

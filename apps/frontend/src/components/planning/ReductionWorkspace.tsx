@@ -3,11 +3,13 @@ import { Cpu, Check, X, AlertTriangle, ChevronDown, Loader2, GitCompare } from '
 import { usePlan, useGeneratePlan, usePlanVersions } from '../../hooks/usePlanning'
 import { useSegmentationResult } from '../../hooks/useSegmentation'
 import { usePlanningStore } from '../../stores/planningStore'
+import { useViewerStore } from '../../stores/viewerStore'
 import Viewer3D from '../viewer/Viewer3D'
 import FragmentControls from '../viewer/FragmentControls'
 import RecommendationCard from '../common/RecommendationCard'
 import { PageLoading, ErrorState, Spinner } from '../common/LoadingOverlay'
 import { MetricInline } from '../common/MetricCard'
+import { ProvenanceCard } from '../common/TrustIndicators'
 import type { FragmentTransform, ConstraintValidation } from '../../types/medical'
 
 function ValidationItem({ v }: { v: ConstraintValidation }) {
@@ -41,13 +43,18 @@ function ValidationItem({ v }: { v: ConstraintValidation }) {
 
 function FragmentStatusList({ fragments }: { fragments: FragmentTransform[] }) {
   const { selectFragment, selectedFragmentId } = usePlanningStore()
+  const { setSelectedFragment } = useViewerStore()
 
   return (
     <div className="space-y-1" data-testid="fragment-list">
       {fragments.map(f => (
         <div
           key={f.fragmentId}
-          onClick={() => selectFragment(f.fragmentId === selectedFragmentId ? null : f.fragmentId)}
+          onClick={() => {
+            const nextId = f.fragmentId === selectedFragmentId ? null : f.fragmentId
+            selectFragment(nextId)
+            setSelectedFragment(nextId)
+          }}
           className={`flex items-center gap-2 p-2.5 rounded-md border cursor-pointer transition-all ${
             selectedFragmentId === f.fragmentId
               ? 'border-cyan-700 bg-cyan-950/40'
@@ -142,9 +149,9 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
       </div>
 
       {/* Right: Planning panel (40%) */}
-      <div className="w-[420px] shrink-0 flex flex-col border-l border-slate-800 bg-slate-900 overflow-hidden" data-testid="planning-panel">
+      <div className="w-[420px] shrink-0 flex flex-col overflow-hidden border-l border-white/10 bg-[rgba(8,14,26,0.84)] backdrop-blur-xl" data-testid="planning-panel">
         {/* Plan header */}
-        <div className="p-4 border-b border-slate-800">
+        <div className="p-4 border-b border-white/10">
           <div className="flex items-center justify-between mb-2">
             <div>
               <h3 className="text-sm font-semibold text-slate-100">{plan.name}</h3>
@@ -179,6 +186,8 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
 
         <div className="flex-1 overflow-y-auto">
           <div className="p-4 space-y-4">
+            <ProvenanceCard provenance={plan.provenance} title="Planning Provenance" />
+
             {/* AI Recommendation */}
             <RecommendationCard
               recommendation={plan.aiRecommendation}
@@ -196,7 +205,7 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
             </div>
 
             {/* Measurement readouts */}
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-3" data-testid="measurement-readouts">
+            <div className="surface-card-muted p-3" data-testid="measurement-readouts">
               <p className="label-xs mb-2">Occlusal Measurements</p>
               <MetricInline
                 label="Overjet"
@@ -229,7 +238,7 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
             </div>
 
             {/* Constraint checklist */}
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-3" data-testid="constraint-checklist">
+            <div className="surface-card-muted p-3" data-testid="constraint-checklist">
               <p className="label-xs mb-2">Constraint Validation</p>
               {plan.validations.map((v: ConstraintValidation) => (
                 <ValidationItem key={v.name} v={v} />
@@ -251,7 +260,7 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
 
         {/* Fragment controls */}
         {showFragmentControls && (
-          <div className="h-72 border-t border-slate-700 flex flex-col" data-testid="fragment-controls-section">
+          <div className="h-72 flex flex-col border-t border-white/10" data-testid="fragment-controls-section">
             <div className="panel-header py-2">
               <span className="text-xs font-semibold text-slate-300">Fragment Controls</span>
               <button onClick={() => setShowFragmentControls(false)} className="text-slate-500 hover:text-slate-300 text-xs">×</button>
@@ -263,7 +272,7 @@ export default function ReductionWorkspace({ caseId, planId }: ReductionWorkspac
         )}
 
         {/* Footer actions */}
-        <div className="p-4 border-t border-slate-800 space-y-2">
+        <div className="p-4 border-t border-white/10 space-y-2">
           <button
             onClick={async () => {
               setGenerating(true)
