@@ -35,9 +35,15 @@ from typing import Any, Dict, List, Optional
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import ensure_case_read_access, ensure_case_write_access
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.security import CurrentUser, get_current_user, require_surgeon
+from app.db.database import get_db_session
+from app.models.case import SurgicalCase
 from app.schemas.common import BaseSchema
 from app.workers.celery_app import celery_app
 
@@ -327,6 +333,57 @@ def _build_job_status(result: AsyncResult) -> JobStatusResponse:
     )
 
 
+async def _authorize_job_access(
+    job: JobStatusResponse,
+    current_user: CurrentUser,
+    db: AsyncSession,
+    *,
+    write_access: bool = False,
+) -> None:
+    """Enforce case-scoped access for a job whenever a case_id is available."""
+    if current_user.is_admin:
+        return
+
+    if not job.case_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Job is not associated with an accessible case",
+        )
+
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == job.case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job case not found")
+
+    if write_access:
+        await ensure_case_write_access(case, current_user, db)
+    else:
+        await ensure_case_read_access(case, current_user, db)
+
+
+async def _load_authorized_job_status(
+    job_id: str,
+    current_user: CurrentUser,
+    db: AsyncSession,
+    *,
+    write_access: bool = False,
+) -> JobStatusResponse:
+    """Build a job status payload and verify the caller can access its case."""
+    try:
+        result = AsyncResult(job_id, app=celery_app)
+    except Exception as exc:
+        logger.error("job_result_lookup_failed", job_id=job_id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to reach job result backend",
+        )
+
+    job_response = _build_job_status(result)
+    await _authorize_job_access(job_response, current_user, db, write_access=write_access)
+    return job_response
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
@@ -339,7 +396,11 @@ def _build_job_status(result: AsyncResult) -> JobStatusResponse:
         "for a Celery job identified by its task UUID."
     ),
 )
-async def get_job_status(job_id: str) -> JobStatusResponse:
+async def get_job_status(
+    job_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> JobStatusResponse:
     """
     GET /api/v1/jobs/{job_id}
 
@@ -354,16 +415,7 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
       CANCELLED – Job was revoked before or during execution.
       UNKNOWN   – Job ID not found in the result backend (may have expired).
     """
-    try:
-        result = AsyncResult(job_id, app=celery_app)
-    except Exception as exc:
-        logger.error("job_result_lookup_failed", job_id=job_id, error=str(exc))
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to reach job result backend",
-        )
-
-    return _build_job_status(result)
+    return await _load_authorized_job_status(job_id, current_user, db)
 
 
 @router.get(
@@ -385,6 +437,8 @@ async def get_job_logs(
     ),
     limit: int = Query(default=200, ge=1, le=1000, description="Maximum log entries to return"),
     offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> JobLogsResponse:
     """
     GET /api/v1/jobs/{job_id}/logs
@@ -396,6 +450,8 @@ async def get_job_logs(
     logs), returns an empty list rather than 404.
     """
     import redis as sync_redis
+
+    await _load_authorized_job_status(job_id, current_user, db)
 
     log_key = f"job_log:{job_id}"
     entries: List[JobLogEntry] = []
@@ -469,6 +525,8 @@ async def cancel_job(
             "Use only when soft revoke does not work within a reasonable time."
         ),
     ),
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_surgeon),
 ) -> JobCancelResponse:
     """
     POST /api/v1/jobs/{job_id}/cancel
@@ -477,14 +535,22 @@ async def cancel_job(
     to confirm the transition to CANCELLED status.
     """
     try:
-        result = AsyncResult(job_id, app=celery_app)
-        current_status = _celery_state_to_job_status(result.state)
+        job_response = await _load_authorized_job_status(
+            job_id,
+            current_user,
+            db,
+            write_access=True,
+        )
+        current_status = job_response.status
+        current_status_value = (
+            current_status.value if isinstance(current_status, JobStatus) else str(current_status)
+        )
 
         if current_status in (JobStatus.SUCCESS, JobStatus.FAILED, JobStatus.CANCELLED):
             return JobCancelResponse(
                 job_id=job_id,
                 cancelled=False,
-                message=f"Job is already in terminal state: {current_status.value}",
+                message=f"Job is already in terminal state: {current_status_value}",
             )
 
         # Revoke the task
@@ -498,7 +564,7 @@ async def cancel_job(
             "job_cancel_requested",
             job_id=job_id,
             terminate=terminate,
-            previous_status=current_status.value,
+            previous_status=current_status_value,
         )
 
         return JobCancelResponse(
@@ -548,6 +614,8 @@ async def list_jobs(
     ),
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(default=20, ge=1, le=100, description="Results per page"),
+    db: AsyncSession = Depends(get_db_session),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> JobListResponse:
     """
     GET /api/v1/jobs?case_id={case_id}&status={status}&type={type}
@@ -575,6 +643,12 @@ async def list_jobs(
 
         # Determine which Redis key to query
         if case_id:
+            case = (
+                await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+            ).scalar_one_or_none()
+            if not case:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+            await ensure_case_read_access(case, current_user, db)
             index_key = f"case_jobs:{case_id}"
         else:
             index_key = "all_jobs"
@@ -598,6 +672,11 @@ async def list_jobs(
         try:
             result = AsyncResult(jid, app=celery_app)
             job_response = _build_job_status(result)
+
+            try:
+                await _authorize_job_access(job_response, current_user, db)
+            except HTTPException:
+                continue
 
             # Apply filters
             if status_filter and job_response.status.value != status_filter:

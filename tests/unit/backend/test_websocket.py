@@ -14,10 +14,6 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-pytestmark = [
-    pytest.mark.asyncio,
-]
-
 
 @pytest.fixture
 def sync_client(app):
