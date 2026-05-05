@@ -53,7 +53,12 @@ async def test_trigger_segmentation_creates_job_record(app, async_client, monkey
 
 async def test_approve_structure_marks_review_status(app, async_client, monkeypatch):
     segmentation = make_segmentation(structures={"mandible": {"status": "pending"}})
-    session = make_session([MockExecuteResult(scalar_one_or_none=segmentation)])
+    session = make_session(
+        [
+            MockExecuteResult(scalar_one_or_none=segmentation),
+            MockExecuteResult(scalar_one_or_none=make_case(id=segmentation.case_id)),
+        ]
+    )
     app.dependency_overrides[get_db_session] = make_db_override(session)
     app.dependency_overrides[require_surgeon] = make_user_override()
     monkeypatch.setattr("sqlalchemy.orm.attributes.flag_modified", lambda *args, **kwargs: None)
@@ -91,5 +96,60 @@ async def test_request_resegmentation_returns_new_job(app, async_client, monkeyp
     assert response.status_code == 202
     assert response.json()["job_id"] == "resegment-task-001"
     assert segmentation.structures["mandible"]["resegment_task_id"] == "resegment-task-001"
+
+    app.dependency_overrides.clear()
+
+
+async def test_get_segmentation_forbidden_for_other_institution(app, async_client):
+    segmentation = make_segmentation()
+    inaccessible_case = make_case(
+        id=segmentation.case_id,
+        surgeon_id="another-surgeon",
+        created_by="another-surgeon",
+        institution_code="OTHER-INST",
+    )
+    session = make_session(
+        [
+            MockExecuteResult(scalar_one_or_none=segmentation),
+            MockExecuteResult(scalar_one_or_none=inaccessible_case),
+        ]
+    )
+    app.dependency_overrides[get_db_session] = make_db_override(session)
+    app.dependency_overrides[get_current_user] = make_user_override(institution_code="DEMO-INST")
+
+    response = await async_client.get(f"/api/v1/segmentation/{segmentation.id}")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "You do not have access to this case"
+
+    app.dependency_overrides.clear()
+
+
+async def test_request_resegmentation_forbidden_for_other_institution(
+    app, async_client, monkeypatch
+):
+    segmentation = make_segmentation()
+    inaccessible_case = make_case(
+        id=segmentation.case_id,
+        surgeon_id="another-surgeon",
+        created_by="another-surgeon",
+        institution_code="OTHER-INST",
+    )
+    session = make_session(
+        [
+            MockExecuteResult(scalar_one_or_none=segmentation),
+            MockExecuteResult(scalar_one_or_none=inaccessible_case),
+        ]
+    )
+    app.dependency_overrides[get_db_session] = make_db_override(session)
+    app.dependency_overrides[require_surgeon] = make_user_override(institution_code="DEMO-INST")
+    monkeypatch.setattr("sqlalchemy.orm.attributes.flag_modified", lambda *args, **kwargs: None)
+
+    response = await async_client.post(
+        f"/api/v1/segmentation/{segmentation.id}/structures/mandible/resegment"
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "You do not have write access to this case"
 
     app.dependency_overrides.clear()

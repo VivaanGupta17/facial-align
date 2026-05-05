@@ -16,6 +16,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import (
+    ensure_case_read_access,
+    ensure_case_write_access,
+    ensure_plan_read_access,
+    ensure_plan_write_access,
+    ensure_segmentation_read_access,
+)
 from app.core.config import get_settings
 from app.core.exceptions import CaseNotFoundError, PlanNotFoundError, SegmentationNotFoundError
 from app.core.logging import get_logger
@@ -215,6 +222,7 @@ async def create_reduction_plan(
     ).scalar_one_or_none()
     if not case:
         raise CaseNotFoundError(f"Case {payload.case_id} not found")
+    await ensure_case_write_access(case, current_user, db)
 
     seg = (
         await db.execute(
@@ -223,6 +231,12 @@ async def create_reduction_plan(
     ).scalar_one_or_none()
     if not seg:
         raise SegmentationNotFoundError(f"Segmentation {payload.segmentation_id} not found")
+    await ensure_segmentation_read_access(seg, current_user, db)
+    if str(seg.case_id) != str(payload.case_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Segmentation does not belong to the requested case",
+        )
 
     if seg.status != "complete":
         from app.core.exceptions import FacialAlignError
@@ -299,6 +313,13 @@ async def get_case_plans(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> List[ReductionPlanResponse]:
     """Get all reduction plan versions for a surgical case."""
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+    await ensure_case_read_access(case, current_user, db)
+
     rows = (
         await db.execute(
             select(ReductionPlanModel)
@@ -327,6 +348,7 @@ async def get_plan(
     ).scalar_one_or_none()
     if not row:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_read_access(row, current_user, db)
 
     audit_logger.log_phi_access(
         user_id=current_user.user_id,
@@ -365,6 +387,7 @@ async def apply_surgeon_edit(
     ).scalar_one_or_none()
     if not source_plan:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_write_access(source_plan, current_user, db)
 
     # Get next version number
     next_version_result = (
@@ -475,6 +498,7 @@ async def override_occlusal_metric(
     ).scalar_one_or_none()
     if not source_plan:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_write_access(source_plan, current_user, db)
 
     # Get next version number
     next_version_result = (
@@ -592,6 +616,7 @@ async def approve_plan(
     ).scalar_one_or_none()
     if not row:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_write_access(row, current_user, db)
 
     row.surgeon_approved = True
     row.approved_at = datetime.now(timezone.utc)
@@ -641,6 +666,7 @@ async def validate_plan(
     ).scalar_one_or_none()
     if not row:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_read_access(row, current_user, db)
 
     from app.services.reduction.reduction_service import FractureReductionService
     service = FractureReductionService()
@@ -691,6 +717,7 @@ async def export_plan_stl(
     ).scalar_one_or_none()
     if not plan:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_read_access(plan, current_user, db)
 
     # Load associated segmentation
     seg = (
@@ -880,14 +907,12 @@ async def export_plan_stl(
             )
         except (ImportError, AttributeError):
             logger.warning("stl_exporter_splint_not_available", plan_id=plan_id_str)
-            from fastapi.responses import Response
-            placeholder = b"solid placeholder\nendsolid placeholder\n"
-            return Response(
-                content=placeholder,
-                media_type="application/octet-stream",
-                headers={
-                    "Content-Disposition": f'attachment; filename="splint-{plan_id}.stl"'
-                },
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Requested splint or plate export is unavailable in this environment. "
+                    "Enable the STL exporter implementation before using this export type."
+                ),
             )
     else:
         raise HTTPException(
@@ -937,6 +962,7 @@ async def download_export_stl(
     ).scalar_one_or_none()
     if not plan:
         raise PlanNotFoundError(f"Plan {plan_id} not found")
+    await ensure_plan_read_access(plan, current_user, db)
 
     # Sanitize filename to prevent path traversal
     safe_filename = Path(filename).name

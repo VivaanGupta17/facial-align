@@ -12,6 +12,7 @@ from app.core.scope import normalize_institution_code
 from app.core.security import CurrentUser
 from app.models.case import SurgicalCase
 from app.models.patient import Patient
+from app.models.plan import ReductionPlan
 from app.models.review import PlanReview
 from app.models.segmentation import SegmentationResult
 from app.models.study import ImagingStudy
@@ -167,4 +168,49 @@ async def ensure_segmentation_read_access(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Segmentation case not found")
 
     await ensure_case_read_access(case, current_user, db)
+    return case
+
+
+async def ensure_segmentation_write_access(
+    segmentation: SegmentationResult,
+    current_user: CurrentUser,
+    db: AsyncSession,
+) -> SurgicalCase:
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == segmentation.case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Segmentation case not found")
+
+    await ensure_case_write_access(case, current_user, db)
+    return case
+
+
+async def ensure_plan_read_access(
+    plan: ReductionPlan,
+    current_user: CurrentUser,
+    db: AsyncSession,
+) -> SurgicalCase:
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == plan.case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan case not found")
+
+    await ensure_case_read_access(case, current_user, db)
+    return case
+
+
+async def ensure_plan_write_access(
+    plan: ReductionPlan,
+    current_user: CurrentUser,
+    db: AsyncSession,
+) -> SurgicalCase:
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == plan.case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan case not found")
+
+    await ensure_case_write_access(case, current_user, db)
     return case

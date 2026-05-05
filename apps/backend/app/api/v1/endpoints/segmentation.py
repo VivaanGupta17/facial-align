@@ -12,6 +12,12 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.authorization import (
+    ensure_case_read_access,
+    ensure_case_write_access,
+    ensure_segmentation_read_access,
+    ensure_segmentation_write_access,
+)
 from app.core.exceptions import CaseNotFoundError, SegmentationNotFoundError
 from app.core.logging import get_logger
 from app.core.security import CurrentUser, get_current_user, require_surgeon
@@ -113,6 +119,7 @@ async def trigger_segmentation(
     ).scalar_one_or_none()
     if not case:
         raise CaseNotFoundError(f"Case {payload.case_id} not found")
+    await ensure_case_write_access(case, current_user, db)
 
     resolved_model, resolved_run_dental, provenance = _resolve_segmentation_request(
         payload.model_name,
@@ -180,6 +187,13 @@ async def get_case_segmentations(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> List[SegmentationResult]:
     """Get all segmentation results for a surgical case."""
+    case = (
+        await db.execute(select(SurgicalCase).where(SurgicalCase.id == case_id))
+    ).scalar_one_or_none()
+    if not case:
+        raise CaseNotFoundError(f"Case {case_id} not found")
+    await ensure_case_read_access(case, current_user, db)
+
     stmt = (
         select(SegmentationModel)
         .where(SegmentationModel.case_id == case_id)
@@ -207,6 +221,7 @@ async def get_segmentation(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+    await ensure_segmentation_read_access(row, current_user, db)
     return _to_schema(row)
 
 
@@ -230,6 +245,7 @@ async def get_job_status(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+    await ensure_segmentation_read_access(row, current_user, db)
 
     if not row.celery_task_id:
         return JobStatus(
@@ -272,6 +288,7 @@ async def list_meshes(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+    await ensure_segmentation_read_access(row, current_user, db)
 
     mesh_paths: dict = row.mesh_storage_paths or {}
     meshes = []
@@ -306,6 +323,7 @@ async def get_confidence_maps(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+    await ensure_segmentation_read_access(row, current_user, db)
 
     confidence_scores: dict = row.confidence_scores or {}
     volume_stats: dict = row.volume_stats or {}
@@ -341,6 +359,7 @@ async def approve_structure(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+    await ensure_segmentation_write_access(row, current_user, db)
 
     structures: dict = row.structures or {}
     if label not in structures:
@@ -380,6 +399,7 @@ async def reject_structure(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
+    await ensure_segmentation_write_access(row, current_user, db)
 
     structures: dict = row.structures or {}
     if label not in structures:
@@ -420,12 +440,7 @@ async def request_resegmentation(
     ).scalar_one_or_none()
     if not row:
         raise SegmentationNotFoundError(f"Segmentation {segmentation_id} not found")
-
-    case = (
-        await db.execute(select(SurgicalCase).where(SurgicalCase.id == row.case_id))
-    ).scalar_one_or_none()
-    if not case:
-        raise CaseNotFoundError(f"Case {row.case_id} not found")
+    case = await ensure_segmentation_write_access(row, current_user, db)
 
     task = run_segmentation_pipeline.delay(
         segmentation_id=str(segmentation_id),
